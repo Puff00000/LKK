@@ -1,0 +1,128 @@
+{
+  "project_name": "Localink",
+  "app_type": "hybrid_fullstack",
+  "theme": {
+    "mode": "light",
+    "archetype": "1 (Organic & Earthy)"
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#166534",
+      "hover": "#14532D",
+      "light": "#DCFCE7",
+      "description": "Forest Green - Represents trust, warmth, and organic local connection."
+    },
+    "background": {
+      "DEFAULT": "#FFFFFF",
+      "secondary": "#FAFAF9",
+      "description": "Pure white base with warm stone/off-white for secondary surfaces."
+    },
+    "text": {
+      "primary": "#1C1917",
+      "secondary": "#57534E",
+      "inverse": "#FFFFFF"
+    },
+    "border": {
+      "DEFAULT": "#E7E5E4"
+    },
+    "forbidden_colors": [
+      "#9D4CDD",
+      "#1B93A4",
+      "#7351B7",
+      "purple",
+      "violet",
+      "teal gradients"
+    ]
+  },
+  "typography": {
+    "headings": {
+      "family": "Outfit",
+      "weights": ["400", "500", "700"],
+      "description": "Outfit provides a modern, geometric yet friendly feel, fitting the Indian-friendly aesthetic.",
+      "tracking": "tracking-tight"
+    },
+    "body": {
+      "family": "Manrope",
+      "weights": ["400", "500"],
+      "description": "Manrope is highly legible and warm, perfect for reading travel itineraries and chat messages."
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-stone-900",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-semibold tracking-tight text-stone-900",
+      "h3": "text-xl sm:text-2xl font-medium text-stone-900",
+      "body": "text-base text-stone-600 leading-relaxed",
+      "small": "text-sm text-stone-500 uppercase tracking-[0.2em]"
+    }
+  },
+  "spacing_and_layout": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "spacing_scale": "Use generous spacing: p-6, p-8, p-12. Avoid cramped containers.",
+    "landing_page": {
+      "grid": "grid-cols-1 md:grid-cols-12 gap-8",
+      "alignment": "Asymmetrical layouts where possible. Left-align dense content and hero text."
+    },
+    "dashboard": {
+      "grid": "grid-cols-1 lg:grid-cols-4 gap-6",
+      "style": "Control Room layout. Dense, functional, cardless or 1px flat borders with no heavy drop shadows."
+    }
+  },
+  "components": {
+    "marketplace_card": {
+      "structure": "Clean, flat rectangular card. Image on top (aspect-square or 4:5), 1px subtle border (#E7E5E4).",
+      "content": "Local guide name, location, rating, and package price prominently displayed.",
+      "hover_state": "-translate-y-1 transition-transform duration-300, shadow-lg"
+    },
+    "buttons": {
+      "primary": "bg-green-800 text-white hover:bg-green-900 px-6 py-3 rounded-md transition-colors",
+      "secondary": "border border-stone-300 text-stone-700 hover:bg-stone-50 px-6 py-3 rounded-md transition-colors",
+      "radius": "rounded-lg"
+    },
+    "chat_ui": {
+      "layout": "Flexbox column for messages. Traveller messages on right (bg-green-100 text-green-900), guide on left (bg-stone-100 text-stone-800).",
+      "input": "Shadcn input, heavily customized to have 1px border, rounded-full, with a green send button."
+    },
+    "navigation": {
+      "style": "Glassmorphism if scrolling over hero (backdrop-blur-xl bg-white/80 border-b border-stone-200), otherwise solid white.",
+      "links": "Visible on desktop. No hamburger menu on desktop."
+    }
+  },
+  "motion_and_interaction": {
+    "hover": "All interactive elements must have explicit hover states (e.g., hover:bg-green-900 hover:text-white).",
+    "transitions": "Use specific properties: transition: transform 0.2s ease, opacity 0.2s ease.",
+    "focus": "High contrast focus rings: focus:ring-2 focus:ring-green-600 focus:outline-none."
+  },
+  "media_and_images": {
+    "style": "No cheesy stock photos. Use abstract green textures and minimal illustrative objects to establish the earthy and travel vibe.",
+    "urls": {
+      "hero_background": {
+        "url": "https://images.unsplash.com/photo-1629197520635-16570fbd0bb3?crop=entropy&cs=srgb&fm=jpg",
+        "description": "Green textile abstract texture. Use with a white/off-white overlay to give a warm, organic background."
+      },
+      "abstract_accent_1": {
+        "url": "https://images.unsplash.com/photo-1548362851-ea052637ad64?crop=entropy&cs=srgb&fm=jpg",
+        "description": "Blurry green and blue background. Good for soft, atmospheric accents."
+      },
+      "illustration_concept": {
+        "url": "https://images.unsplash.com/photo-1708454260824-c484d15fe92e?crop=entropy&cs=srgb&fm=jpg",
+        "description": "Abstract shapes representing custom itinerary building."
+      },
+      "travel_concept": {
+        "url": "https://images.pexels.com/photos/7411984/pexels-photo-7411984.jpeg",
+        "description": "Hands drawing a world map on paper. Ideal for 'How it Works' or 'Destinations' section."
+      }
+    }
+  },
+  "testing": {
+    "rules": "All interactive and key informational elements MUST include a data-testid attribute.",
+    "format": "kebab-case, role-based. e.g., data-testid='book-now-button'."
+  },
+  "instructions_to_main_agent": [
+    "Use pure HTML+Tailwind for complex marketing layouts like the Hero to allow asymmetry.",
+    "Use Shadcn UI for forms, modals, tables, and Dashboard components. Customize Shadcn to match the earthy theme by removing harsh shadows and using soft 1px borders.",
+    "Ensure the application is mobile-first.",
+    "Write code using .js and .jsx extensions, not .tsx.",
+    "Always explicitly set text color on hover. E.g., hover:bg-green-800 hover:text-white.",
+    "Adhere to typography rules: Outfit for headings, Manrope for body text. Do not use Inter or Roboto.",
+    "Add data-testid attributes to all actionable components."
+  ]
+}
