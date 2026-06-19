@@ -38,47 +38,20 @@ const Marigold = ({ className = "" }) => (
   </svg>
 );
 
-// The melting headline: every letter uses the chunky Bagel Fat One bubble font,
-// but progressively gets smaller, opens up its tracking, and squashes (scaleY ↓)
-// to feel like the letterforms are physically melting/dissolving toward the end.
+// Headline rendered uniformly in Bagel Fat One, all green, no per-letter scaling.
 function MeltHeadline({ text }) {
-  const chars = text.split("");
-  const total = chars.length;
   return (
     <h2
       data-testid="melt-headline"
       aria-label={text}
-      className="melt-headline select-none text-green-900"
-      style={{ fontFamily: "'Bagel Fat One', serif" }}
+      className="select-none text-green-900"
+      style={{
+        fontFamily: "'Bagel Fat One', serif",
+        letterSpacing: "-0.02em",
+        lineHeight: 1,
+      }}
     >
-      {chars.map((ch, i) => {
-        const ratio = i / Math.max(total - 1, 1); // 0 → 1 left to right
-        // size shrinks from 1.0em → 0.55em
-        const sizeFactor = 1 - ratio * 0.45;
-        // vertical squish: chars get progressively shorter, like melting
-        const scaleY = 1 - ratio * 0.35;
-        // tracking opens up gently
-        const tracking = `${-0.04 + ratio * 0.1}em`;
-        // baseline drift downward as we go right
-        const drop = `${ratio * 6}px`;
-        // colour fades from deep green → muted stone
-        const color = ratio < 0.4 ? "#14532d" : ratio < 0.75 ? "#166534" : "#3f3f46";
-        return (
-          <span
-            key={i}
-            style={{
-              fontFamily: "'Bagel Fat One', serif",
-              fontSize: `${sizeFactor}em`,
-              letterSpacing: tracking,
-              transform: `translateY(${drop}) scaleY(${scaleY})`,
-              transformOrigin: "bottom center",
-              color,
-            }}
-          >
-            {ch === " " ? "\u00A0" : ch}
-          </span>
-        );
-      })}
+      {text}
     </h2>
   );
 }
