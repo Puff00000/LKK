@@ -12,9 +12,15 @@ import {
 import { Menu, User, LogOut, LayoutDashboard, Shield } from "lucide-react";
 
 const Logo = () => (
-  <Link to="/" data-testid="nav-logo" className="flex items-center gap-2">
-    <span className="grid h-8 w-8 place-items-center rounded-lg bg-green-800 text-white font-heading font-bold">L</span>
-    <span className="font-heading text-xl font-bold tracking-tight text-stone-900">localink</span>
+  <Link to="/" data-testid="nav-logo" className="group flex items-center gap-2.5">
+    <span className="relative grid h-9 w-9 place-items-center rounded-lg bg-green-800 text-white font-display text-base">
+      <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500" />
+      LKK
+    </span>
+    <span className="flex flex-col leading-none">
+      <span className="font-display text-lg text-stone-900">LKK</span>
+      <span className="font-devanagari text-[10px] text-amber-700 tracking-wide">लोक क्या कहेंगे</span>
+    </span>
   </Link>
 );
 

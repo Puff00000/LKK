@@ -76,7 +76,7 @@ export default function Login() {
         </form>
 
         <p className="mt-6 text-sm text-stone-600">
-          New to Localink?{" "}
+          New to LKK?{" "}
           <Link to="/register" className="font-medium text-green-800 hover:underline" data-testid="login-to-register">
             Create an account
           </Link>

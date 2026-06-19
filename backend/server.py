@@ -30,12 +30,12 @@ PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="Localink API")
+app = FastAPI(title="LKK API")
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("localink")
+logger = logging.getLogger("lkk")
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -667,7 +667,7 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
 # --- Health ----------------------------------------------------------------
 @api.get("/")
 async def root():
-    return {"ok": True, "service": "localink"}
+    return {"ok": True, "service": "lkk"}
 
 
 app.include_router(api)

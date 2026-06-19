@@ -30,7 +30,7 @@ export default function Register() {
   return (
     <div className="mx-auto grid min-h-[80vh] max-w-md place-items-center px-4 py-12" data-testid="register-page">
       <div className="w-full">
-        <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900">Join Localink</h1>
+        <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900">Join LKK</h1>
         <p className="mt-2 text-stone-600">Travel like a local — or share your city as one.</p>
 
         <form onSubmit={onSubmit} className="mt-8 space-y-5">

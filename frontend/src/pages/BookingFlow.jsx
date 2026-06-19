@@ -160,7 +160,7 @@ export default function BookingFlow() {
 
               <div className="grid gap-3 rounded-xl border border-stone-200 p-4 text-sm">
                 <div className="flex justify-between"><span className="text-stone-500">Package</span><span className="text-stone-900">{inr(guide.price)}</span></div>
-                <div className="flex justify-between"><span className="text-stone-500">Localink platform fee (10%)</span><span className="text-stone-900">{inr(fee)}</span></div>
+                <div className="flex justify-between"><span className="text-stone-500">LKK platform fee (10%)</span><span className="text-stone-900">{inr(fee)}</span></div>
                 <div className="flex justify-between border-t border-stone-100 pt-3 font-heading text-base font-semibold"><span>Total</span><span>{inr(guide.price)}</span></div>
                 <div className="text-xs text-stone-500">Your local receives {inr(localGets)} after you confirm the itinerary.</div>
               </div>
