@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700&family=Yatra+One&family=Tiro+Devanagari+Hindi&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Manrope:wght@400;500;600;700&family=Bagel+Fat+One&display=swap");
 
 :root {
     --background: 0 0% 100%;
@@ -52,8 +52,20 @@ h1, h2, h3, h4, h5, h6, .font-heading {
 }
 
 .font-body { font-family: "Manrope", system-ui, sans-serif; }
-.font-display { font-family: "Yatra One", "Outfit", serif; letter-spacing: 0; }
-.font-devanagari { font-family: "Tiro Devanagari Hindi", "Yatra One", serif; }
+.font-bagel { font-family: "Bagel Fat One", "Outfit", serif; letter-spacing: -0.02em; }
+.font-display { font-family: "Bagel Fat One", "Outfit", serif; letter-spacing: -0.02em; }
+
+/* Melting headline — each letter slot can have its own weight + family
+   The cascade from chunky bubble → clean sans is set inline per-letter. */
+.melt-headline {
+    font-family: "Bagel Fat One", "Outfit", serif;
+    line-height: 0.88;
+    color: hsl(var(--primary));
+}
+.melt-headline > span {
+    display: inline-block;
+    transition: transform 600ms ease, font-weight 600ms ease;
+}
 
 ::selection {
     background: hsl(var(--primary));

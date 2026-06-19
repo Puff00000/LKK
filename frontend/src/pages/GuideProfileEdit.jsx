@@ -94,14 +94,14 @@ export default function GuideProfileEdit() {
           <div className="mt-3 px-1">
             <Slider
               data-testid="profile-price"
-              min={499}
+              min={199}
               max={1999}
               step={50}
               value={[form.price]}
               onValueChange={([v]) => setForm({ ...form, price: v })}
             />
             <div className="mt-1.5 flex justify-between text-xs text-stone-500">
-              <span>₹499</span><span>₹1999</span>
+              <span>₹199 · chat-only</span><span>₹499+/day · in-person</span>
             </div>
           </div>
         </div>

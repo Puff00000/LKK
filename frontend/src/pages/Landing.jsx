@@ -14,7 +14,7 @@ const steps = [
   {
     icon: Sparkles,
     title: "Book a package",
-    body: "Choose your dates and pay securely. Packages start at ₹499 — no hidden tourist mark-ups.",
+    body: "Choose your dates and pay securely. Chat-only insights from ₹199 — in-person guidance from ₹499 a day.",
     accent: "bg-green-50 text-green-800 ring-green-200",
   },
   {
@@ -25,26 +25,63 @@ const steps = [
   },
 ];
 
-// Decorative marigold motif used as small ornamental accent
+// Decorative marigold motif — subtle ornamental accent
 const Marigold = ({ className = "" }) => (
   <svg viewBox="0 0 40 40" className={className} aria-hidden>
     <g fill="currentColor">
       {Array.from({ length: 8 }).map((_, i) => (
-        <ellipse
-          key={i}
-          cx="20"
-          cy="8"
-          rx="3.5"
-          ry="7"
-          transform={`rotate(${i * 45} 20 20)`}
-          opacity="0.85"
-        />
+        <ellipse key={i} cx="20" cy="8" rx="3.5" ry="7" transform={`rotate(${i * 45} 20 20)`} opacity="0.85" />
       ))}
       <circle cx="20" cy="20" r="3.5" fill="#fff" />
       <circle cx="20" cy="20" r="2" />
     </g>
   </svg>
 );
+
+// The melting headline: starts as chunky Bagel Fat One bubble,
+// gradually transitions through heavy Outfit weights to thin clean.
+function MeltHeadline({ text }) {
+  const chars = text.split("");
+  const total = chars.length;
+  return (
+    <h2
+      data-testid="melt-headline"
+      aria-label={text}
+      className="melt-headline select-none text-stone-900"
+    >
+      {chars.map((ch, i) => {
+        const ratio = i / Math.max(total - 1, 1); // 0 → 1 left to right
+        // 0 - 0.30 chunky bubble; 0.30 - 0.60 heavy Outfit; 0.60+ light Outfit
+        const stage = ratio < 0.3 ? 0 : ratio < 0.6 ? 1 : 2;
+        const family =
+          stage === 0
+            ? "'Bagel Fat One', serif"
+            : "'Outfit', sans-serif";
+        const weight = stage === 0 ? 400 : stage === 1 ? 900 - Math.round((ratio - 0.3) * 600) : 500 - Math.round((ratio - 0.6) * 250);
+        // letter size shrinks slightly + tracking opens up as we move right
+        const sizeFactor = 1 - ratio * 0.32;
+        const tracking = ratio < 0.35 ? "-0.04em" : `${(ratio - 0.35) * 0.08}em`;
+        // tiny baseline drift to make it feel like its melting away
+        const drop = ratio < 0.3 ? `${(0.3 - ratio) * 4}px` : "0";
+        return (
+          <span
+            key={i}
+            style={{
+              fontFamily: family,
+              fontWeight: weight,
+              fontSize: `${sizeFactor}em`,
+              letterSpacing: tracking,
+              transform: `translateY(${drop})`,
+              color: ratio < 0.3 ? "#14532d" : ratio < 0.6 ? "#166534" : "#1c1917",
+            }}
+          >
+            {ch === " " ? "\u00A0" : ch}
+          </span>
+        );
+      })}
+    </h2>
+  );
+}
 
 export default function Landing() {
   return (
@@ -56,13 +93,17 @@ export default function Landing() {
         <Marigold className="absolute right-10 top-24 hidden h-16 w-16 text-amber-500/70 md:block animate-[spin_60s_linear_infinite]" />
         <Marigold className="absolute left-10 bottom-16 hidden h-10 w-10 text-rose-500/60 md:block" />
 
-        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-16 pb-20 sm:pt-24 sm:pb-28">
-          <div className="grid lg:grid-cols-12 gap-12 items-center">
+        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-14 pb-20 sm:pt-20 sm:pb-28">
+          {/* THE MELT HEADLINE — single hero anchor */}
+          <div className="text-[clamp(48px,8.5vw,128px)] leading-none">
+            <MeltHeadline text="lok kya kahenge" />
+          </div>
+
+          <div className="mt-8 grid lg:grid-cols-12 gap-10 items-end">
             <div className="lg:col-span-7">
               <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50/80 px-3 py-1 text-xs font-medium text-amber-900">
                 <span className="grid h-1.5 w-1.5 place-items-center rounded-full bg-amber-600" />
-                <span className="font-devanagari text-[13px] text-amber-900">लोक क्या कहेंगे</span>
-                <span className="text-amber-700">· Lok Kya Kahenge</span>
+                Travel the way locals do
               </div>
 
               <h1 className="mt-5 font-heading text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-stone-900">
@@ -74,9 +115,9 @@ export default function Landing() {
               </h1>
 
               <p className="mt-6 max-w-xl text-base sm:text-lg text-stone-600 leading-relaxed">
-                <span className="font-display text-stone-900">LKK</span> connects you with verified people who actually
-                live in your destination city. Book a package, get a custom itinerary, chat in-app, and meet up — all
-                from <span className="font-semibold text-stone-900">₹499</span>.
+                <span className="font-display text-stone-900">LKK</span> connects you with verified people who live in
+                your destination city. Get insider tips by chat from <span className="font-semibold text-stone-900">₹199</span>,
+                or book them in-person for the day from <span className="font-semibold text-stone-900">₹499</span>.
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
@@ -136,8 +177,8 @@ export default function Landing() {
                     ))}
                   </ul>
                   <div className="mt-6 flex items-center justify-between rounded-xl bg-green-50 px-4 py-3 text-sm border border-green-100">
-                    <span className="text-green-900">Package · 1 day</span>
-                    <span className="font-heading text-lg font-bold text-green-900">₹899</span>
+                    <span className="text-green-900">In-person · 1 day</span>
+                    <span className="font-heading text-lg font-bold text-green-900">₹499</span>
                   </div>
                 </div>
               </div>
@@ -172,7 +213,7 @@ export default function Landing() {
             <div className="kicker">How it works</div>
             <h2 className="mt-3 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">
               Three steps from <br />
-              <span className="font-devanagari text-3xl sm:text-4xl text-amber-700">अजनबी</span> to <span className="text-green-800">friend</span>
+              <span className="text-amber-700">stranger</span> to <span className="text-green-800">friend</span>
             </h2>
             <p className="mt-4 text-stone-600 leading-relaxed">
               We don't sell tours. We connect you with one person whose job is to make your trip feel personal.
@@ -197,34 +238,59 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PRICING */}
+      {/* PRICING — TWO TIERS */}
       <section id="pricing" className="bg-stone-50 border-y border-stone-200">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-20 sm:py-28">
           <div className="max-w-2xl">
-            <div className="kicker-saffron">Pricing · सच्ची कीमत</div>
+            <div className="kicker-saffron">Pricing — pick how close you want them</div>
             <h2 className="mt-3 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">
-              Honest, transparent, set by your local.
+              Two simple ways to travel with a local.
             </h2>
             <p className="mt-4 text-stone-600 leading-relaxed">
-              Locals set their own package price between ₹499 and ₹1999. LKK takes a 10% platform fee. That's it —
-              no surge pricing, no booking fees.
+              Start with a few tips by chat. Upgrade to having them with you in person — only when you both agree.
+              LKK takes a 10% platform fee. That's it — no surge pricing, no booking fees.
             </p>
           </div>
-          <div className="mt-12 grid gap-6 md:grid-cols-3">
-            {[
-              { label: "Starter", price: 499, body: "A few hours, café recommendations, in-app chat.", color: "border-amber-300", chip: "chip-saffron" },
-              { label: "Day with a local", price: 999, body: "Custom day itinerary + 1 in-person meet-up.", color: "border-green-300", chip: "chip" },
-              { label: "Insider weekend", price: 1999, body: "Two-day immersive plan with deep neighbourhood access.", color: "border-rose-300", chip: "chip" },
-            ].map((p) => (
-              <div key={p.label} className={`rounded-2xl border-2 bg-white p-7 ${p.color}`}>
-                <div className="text-xs uppercase tracking-[0.2em] text-stone-500">{p.label}</div>
-                <div className="mt-4 flex items-baseline gap-1 font-heading">
-                  <span className="text-4xl font-bold text-stone-900">₹{p.price}</span>
-                  <span className="text-sm text-stone-500">/ package</span>
-                </div>
-                <p className="mt-3 text-sm text-stone-600 leading-relaxed">{p.body}</p>
+
+          <div className="mt-12 grid gap-6 md:grid-cols-2">
+            <div data-testid="tier-chat" className="rounded-2xl border-2 border-amber-300 bg-white p-8">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-amber-700">
+                <MessageCircle className="h-4 w-4" /> Chat-only insider
               </div>
-            ))}
+              <div className="mt-5 flex items-baseline gap-1 font-heading">
+                <span className="text-5xl font-bold text-stone-900">₹199</span>
+                <span className="text-sm text-stone-500">/ one-time</span>
+              </div>
+              <p className="mt-3 text-sm text-stone-600 leading-relaxed">
+                Your local sends you a custom itinerary and answers questions on chat throughout your trip. Perfect if
+                you want to explore solo but with insider tips in your pocket.
+              </p>
+              <ul className="mt-6 space-y-2 text-sm text-stone-700">
+                <li>✓ Custom day-by-day itinerary in writing</li>
+                <li>✓ In-app chat support before & during trip</li>
+                <li>✓ Restaurant, café & hidden-spot recommendations</li>
+              </ul>
+            </div>
+
+            <div data-testid="tier-in-person" className="rounded-2xl border-2 border-green-700 bg-white p-8 relative overflow-hidden">
+              <span className="absolute right-4 top-4 chip-saffron">Most asked for</span>
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-green-800">
+                <Sparkles className="h-4 w-4" /> In-person, with you
+              </div>
+              <div className="mt-5 flex items-baseline gap-1 font-heading">
+                <span className="text-5xl font-bold text-stone-900">₹499</span>
+                <span className="text-sm text-stone-500">/ per day</span>
+              </div>
+              <p className="mt-3 text-sm text-stone-600 leading-relaxed">
+                Everything in chat-only — plus your local actually walks the city with you. Booked per day, only when
+                both you and your local agree on the meet-up plan.
+              </p>
+              <ul className="mt-6 space-y-2 text-sm text-stone-700">
+                <li>✓ Full in-person guidance during your trip</li>
+                <li>✓ Local takes you to spots no tour goes</li>
+                <li>✓ Mutually agreed dates — both sides confirm</li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
@@ -268,12 +334,9 @@ export default function Landing() {
         <Marigold className="absolute -left-6 top-1/2 -translate-y-1/2 h-32 w-32 text-amber-400/40" />
         <Marigold className="absolute -right-8 bottom-2 h-24 w-24 text-amber-300/50" />
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-16 sm:py-20 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <div>
-            <div className="font-devanagari text-amber-200 text-sm">लोक क्या कहेंगे</div>
-            <h2 className="mt-2 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
-              Your next trip should feel personal. Start with a local.
-            </h2>
-          </div>
+          <h2 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
+            Your next trip should feel personal. Start with a local.
+          </h2>
           <Link to="/browse">
             <Button
               data-testid="cta-browse-btn"
@@ -289,10 +352,7 @@ export default function Landing() {
       {/* FOOTER */}
       <footer className="bg-stone-50 border-t border-stone-200">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-sm text-stone-500">
-          <div>
-            <div className="font-display text-base text-stone-900">LKK</div>
-            <div className="font-devanagari text-xs text-amber-700">लोक क्या कहेंगे · © {new Date().getFullYear()}</div>
-          </div>
+          <div className="font-display text-base text-stone-900">LKK · © {new Date().getFullYear()}</div>
           <div className="flex gap-6">
             <a href="#how" className="hover:text-green-800">How it works</a>
             <a href="#pricing" className="hover:text-green-800">Pricing</a>

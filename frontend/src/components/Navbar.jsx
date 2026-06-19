@@ -17,10 +17,7 @@ const Logo = () => (
       <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500" />
       LKK
     </span>
-    <span className="flex flex-col leading-none">
-      <span className="font-display text-lg text-stone-900">LKK</span>
-      <span className="font-devanagari text-[10px] text-amber-700 tracking-wide">लोक क्या कहेंगे</span>
-    </span>
+    <span className="font-display text-lg text-stone-900 leading-none">LKK</span>
   </Link>
 );
 

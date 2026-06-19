@@ -138,7 +138,7 @@ class GuideProfileIn(BaseModel):
     bio: str
     languages: List[str] = []
     specialities: List[str] = []
-    price: int = Field(ge=499, le=1999)
+    price: int = Field(ge=199, le=1999)
     avatar_url: Optional[str] = None
 
 
