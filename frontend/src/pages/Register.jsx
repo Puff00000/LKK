@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,9 @@ import { toast } from "sonner";
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "traveller" });
+  const [searchParams] = useSearchParams();
+  const initialRole = searchParams.get("role") === "local" ? "local" : "traveller";
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: initialRole });
   const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async (e) => {
@@ -22,7 +24,7 @@ export default function Register() {
       toast.error(res.error);
       return;
     }
-    toast.success(`Welcome to Localink, ${res.user.name}`);
+    toast.success(`Welcome to LKK, ${res.user.name}`);
     if (res.user.role === "local") navigate("/local/profile");
     else navigate("/dashboard");
   };

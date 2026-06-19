@@ -54,18 +54,18 @@ export default function Navbar() {
             <>
               <Button
                 variant="ghost"
-                data-testid="nav-login-btn"
-                onClick={() => navigate("/login")}
+                data-testid="nav-i-am-local"
+                onClick={() => navigate("/register?role=local")}
                 className="text-stone-700 hover:text-green-800 hover:bg-green-50"
               >
-                Log in
+                I am Local
               </Button>
               <Button
-                data-testid="nav-signup-btn"
-                onClick={() => navigate("/register")}
+                data-testid="nav-i-am-traveller"
+                onClick={() => navigate("/browse")}
                 className="bg-green-800 text-white hover:bg-green-900 hover:text-white"
               >
-                Get started
+                I am Traveller
               </Button>
             </>
           ) : (

@@ -121,22 +121,22 @@ export default function Landing() {
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
-                <Link to="/browse">
+                <Link to="/login">
                   <Button
-                    data-testid="hero-browse-btn"
-                    className="h-12 bg-green-800 px-6 text-white hover:bg-green-900 hover:text-white shadow-[0_6px_0_0_rgba(180,83,9,0.95)] hover:shadow-[0_4px_0_0_rgba(180,83,9,0.95)] transition-all"
+                    data-testid="hero-login-btn"
+                    variant="outline"
+                    className="h-12 border-stone-300 px-6 text-stone-800 hover:bg-stone-50"
                   >
-                    Browse locals
-                    <ArrowRight className="ml-2 h-4 w-4" />
+                    Log in
                   </Button>
                 </Link>
                 <Link to="/register">
                   <Button
-                    variant="outline"
-                    data-testid="hero-become-local-btn"
-                    className="h-12 border-stone-300 px-6 text-stone-800 hover:bg-stone-50"
+                    data-testid="hero-get-started-btn"
+                    className="h-12 bg-green-800 px-6 text-white hover:bg-green-900 hover:text-white shadow-[0_6px_0_0_rgba(180,83,9,0.95)] hover:shadow-[0_4px_0_0_rgba(180,83,9,0.95)] transition-all"
                   >
-                    Become a local
+                    Get started
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
               </div>
