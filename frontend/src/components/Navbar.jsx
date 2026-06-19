@@ -52,21 +52,40 @@ export default function Navbar() {
         <div className="flex items-center gap-2">
           {!user ? (
             <>
-              <Button
-                variant="ghost"
-                data-testid="nav-i-am-local"
-                onClick={() => navigate("/register?role=local")}
-                className="text-stone-700 hover:text-green-800 hover:bg-green-50"
-              >
-                I am Local
-              </Button>
-              <Button
-                data-testid="nav-i-am-traveller"
-                onClick={() => navigate("/browse")}
-                className="bg-green-800 text-white hover:bg-green-900 hover:text-white"
-              >
-                I am Traveller
-              </Button>
+              {(() => {
+                const sp = new URLSearchParams(location.search);
+                const activeRole = location.pathname === "/register" ? sp.get("role") : null;
+                const localActive = activeRole === "local";
+                const travellerActive = activeRole === "traveller";
+                return (
+                  <>
+                    <Button
+                      data-testid="nav-i-am-local"
+                      data-active={localActive}
+                      onClick={() => navigate("/register?role=local")}
+                      className={
+                        localActive
+                          ? "bg-green-800 text-white hover:bg-green-900 hover:text-white"
+                          : "bg-transparent text-stone-700 border border-stone-200 hover:bg-green-50 hover:text-green-800 hover:border-green-200"
+                      }
+                    >
+                      I am Local
+                    </Button>
+                    <Button
+                      data-testid="nav-i-am-traveller"
+                      data-active={travellerActive}
+                      onClick={() => navigate("/register?role=traveller")}
+                      className={
+                        travellerActive || (!localActive && !travellerActive)
+                          ? "bg-green-800 text-white hover:bg-green-900 hover:text-white"
+                          : "bg-transparent text-stone-700 border border-stone-200 hover:bg-green-50 hover:text-green-800 hover:border-green-200"
+                      }
+                    >
+                      I am Traveller
+                    </Button>
+                  </>
+                );
+              })()}
             </>
           ) : (
             <DropdownMenu>
