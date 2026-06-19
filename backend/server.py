@@ -1,89 +1,686 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+import os
+import uuid
+import logging
+import bcrypt
+import jwt
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Literal
 
-# Create the main app without a prefix
-app = FastAPI()
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+
+# --- Config ----------------------------------------------------------------
+MONGO_URL = os.environ["MONGO_URL"]
+DB_NAME = os.environ["DB_NAME"]
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 7
+PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))
+
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+app = FastAPI(title="Localink API")
+api = APIRouter(prefix="/api")
+bearer = HTTPBearer(auto_error=False)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("localink")
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# --- Helpers ---------------------------------------------------------------
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_token(user_id: str, email: str, role: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS),
+        "type": "access",
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def public_user(doc: dict) -> dict:
+    return {
+        "id": doc["id"],
+        "email": doc["email"],
+        "name": doc.get("name", ""),
+        "role": doc["role"],
+        "created_at": doc.get("created_at"),
+    }
+
+
+async def get_current_user(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+) -> dict:
+    token = None
+    if creds and creds.scheme.lower() == "bearer":
+        token = creds.credentials
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def require_role(*roles: str):
+    async def dep(user: dict = Depends(get_current_user)) -> dict:
+        if user["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Forbidden: insufficient role")
+        return user
+
+    return dep
+
+
+# --- Models ----------------------------------------------------------------
+Role = Literal["traveller", "local", "admin"]
+BookingStatus = Literal[
+    "pending_payment",
+    "paid",
+    "itinerary_delivered",
+    "completed",
+    "cancelled",
+    "disputed",
+]
+
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6)
+    name: str = Field(min_length=1)
+    role: Literal["traveller", "local"]
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class GuideProfileIn(BaseModel):
+    city: str
+    bio: str
+    languages: List[str] = []
+    specialities: List[str] = []
+    price: int = Field(ge=499, le=1999)
+    avatar_url: Optional[str] = None
+
+
+class GuideProfileOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    user_id: str
+    name: str
+    city: str
+    bio: str
+    languages: List[str]
+    specialities: List[str]
+    price: int
+    avatar_url: Optional[str] = None
+    rating: float = 0.0
+    review_count: int = 0
+    is_complete: bool = False
+
+
+class BookingIn(BaseModel):
+    guide_id: str
+    trip_start: str
+    trip_end: str
+    traveller_phone: str
+    notes: Optional[str] = ""
+
+
+class ItineraryIn(BaseModel):
+    title: str
+    content: str
+
+
+class MessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class ReviewIn(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
+
+
+class DisputeIn(BaseModel):
+    reason: str
+
+
+# --- Startup ---------------------------------------------------------------
+@app.on_event("startup")
+async def on_startup() -> None:
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("id", unique=True)
+    await db.guides.create_index("user_id", unique=True)
+    await db.guides.create_index("id", unique=True)
+    await db.bookings.create_index("id", unique=True)
+    await db.messages.create_index([("booking_id", 1), ("created_at", 1)])
+    await db.reviews.create_index("guide_id")
+    await seed_admin()
+    await seed_demo_data()
+
+
+async def seed_admin() -> None:
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@localink.in")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+    existing = await db.users.find_one({"email": admin_email})
+    if existing is None:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "email": admin_email,
+            "name": "Localink Admin",
+            "role": "admin",
+            "password_hash": hash_password(admin_password),
+            "created_at": now_iso(),
+        })
+        logger.info("Seeded admin: %s", admin_email)
+    elif not verify_password(admin_password, existing.get("password_hash", "")):
+        await db.users.update_one(
+            {"email": admin_email},
+            {"$set": {"password_hash": hash_password(admin_password)}},
+        )
+        logger.info("Updated admin password")
+
+
+DEMO_LOCALS = [
+    {
+        "email": "aarav.jaipur@localink.in",
+        "name": "Aarav Singh",
+        "city": "Jaipur",
+        "bio": "Born and raised in the pink city. I'll show you the hidden havelis, secret rooftop chai spots, and the best laal maas in town.",
+        "languages": ["Hindi", "English", "Rajasthani"],
+        "specialities": ["Heritage walks", "Local cuisine", "Bazaar shopping"],
+        "price": 899,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Aarav&backgroundColor=166534",
+    },
+    {
+        "email": "meera.goa@localink.in",
+        "name": "Meera D'Souza",
+        "city": "Goa",
+        "bio": "Goan Catholic, beach-side café owner, and surfer. Skip the tourist traps — I'll take you to fishermen coves and the live music joints locals love.",
+        "languages": ["English", "Konkani", "Hindi"],
+        "specialities": ["Hidden beaches", "Live music", "Seafood"],
+        "price": 1299,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Meera&backgroundColor=166534",
+    },
+    {
+        "email": "tenzin.manali@localink.in",
+        "name": "Tenzin Norbu",
+        "city": "Manali",
+        "bio": "Mountain guide for 12 years. Day hikes, monastery visits, and the warmest Tibetan thukpa you'll ever taste.",
+        "languages": ["Hindi", "English", "Tibetan"],
+        "specialities": ["Day treks", "Monasteries", "Mountain cafés"],
+        "price": 1499,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Tenzin&backgroundColor=166534",
+    },
+    {
+        "email": "kavya.varanasi@localink.in",
+        "name": "Kavya Mishra",
+        "city": "Varanasi",
+        "bio": "Sanskrit scholar and ghat-side storyteller. Sunrise boat rides, evening aarti, and the philosophy of the old city.",
+        "languages": ["Hindi", "English", "Sanskrit"],
+        "specialities": ["Ghats & aarti", "Heritage", "Spiritual walks"],
+        "price": 699,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Kavya&backgroundColor=166534",
+    },
+    {
+        "email": "rohan.bangalore@localink.in",
+        "name": "Rohan Iyer",
+        "city": "Bangalore",
+        "bio": "Tech worker by day, craft beer & filter coffee guide by weekend. I'll show you the city beyond the malls.",
+        "languages": ["English", "Kannada", "Tamil"],
+        "specialities": ["Café crawls", "Craft breweries", "Indie music"],
+        "price": 999,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Rohan&backgroundColor=166534",
+    },
+    {
+        "email": "priya.udaipur@localink.in",
+        "name": "Priya Rathore",
+        "city": "Udaipur",
+        "bio": "I run a small art school overlooking Lake Pichola. Miniature painting workshops, palace tours, and quiet boat rides at golden hour.",
+        "languages": ["Hindi", "English"],
+        "specialities": ["Art workshops", "Palace tours", "Lake walks"],
+        "price": 1199,
+        "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Priya&backgroundColor=166534",
+    },
+]
+
+
+async def seed_demo_data() -> None:
+    if await db.guides.count_documents({}) > 0:
+        return
+    for d in DEMO_LOCALS:
+        user_id = str(uuid.uuid4())
+        guide_id = str(uuid.uuid4())
+        await db.users.insert_one({
+            "id": user_id,
+            "email": d["email"],
+            "name": d["name"],
+            "role": "local",
+            "password_hash": hash_password("Local@123"),
+            "created_at": now_iso(),
+        })
+        await db.guides.insert_one({
+            "id": guide_id,
+            "user_id": user_id,
+            "name": d["name"],
+            "city": d["city"],
+            "bio": d["bio"],
+            "languages": d["languages"],
+            "specialities": d["specialities"],
+            "price": d["price"],
+            "avatar_url": d["avatar_url"],
+            "rating": 4.7,
+            "review_count": 0,
+            "is_complete": True,
+            "created_at": now_iso(),
+        })
+    logger.info("Seeded %d demo guides", len(DEMO_LOCALS))
+
+
+# --- Auth endpoints --------------------------------------------------------
+@api.post("/auth/register")
+async def register(body: RegisterIn):
+    email = body.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = str(uuid.uuid4())
+    doc = {
+        "id": user_id,
+        "email": email,
+        "name": body.name.strip(),
+        "role": body.role,
+        "password_hash": hash_password(body.password),
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    token = create_token(user_id, email, body.role)
+    return {"token": token, "user": public_user(doc)}
+
+
+@api.post("/auth/login")
+async def login(body: LoginIn):
+    email = body.email.lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_token(user["id"], user["email"], user["role"])
+    return {"token": token, "user": public_user(user)}
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return {"user": public_user(user)}
+
+
+# --- Guide profile ---------------------------------------------------------
+@api.get("/guides")
+async def list_guides(
+    city: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    min_rating: Optional[float] = None,
+    sort: Optional[str] = "rating",
+):
+    query: dict = {"is_complete": True}
+    if city:
+        query["city"] = {"$regex": f"^{city}$", "$options": "i"}
+    if min_price is not None or max_price is not None:
+        price_q: dict = {}
+        if min_price is not None:
+            price_q["$gte"] = min_price
+        if max_price is not None:
+            price_q["$lte"] = max_price
+        query["price"] = price_q
+    if min_rating is not None:
+        query["rating"] = {"$gte": min_rating}
+    sort_field = {"rating": ("rating", -1), "price_low": ("price", 1), "price_high": ("price", -1)}.get(
+        sort or "rating", ("rating", -1)
+    )
+    cursor = db.guides.find(query, {"_id": 0}).sort([sort_field])
+    return await cursor.to_list(200)
+
+
+@api.get("/guides/cities")
+async def list_cities():
+    cities = await db.guides.distinct("city", {"is_complete": True})
+    return sorted(cities)
+
+
+@api.get("/guides/{guide_id}")
+async def get_guide(guide_id: str):
+    guide = await db.guides.find_one({"id": guide_id}, {"_id": 0})
+    if not guide:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    reviews = await db.reviews.find({"guide_id": guide_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"guide": guide, "reviews": reviews}
+
+
+@api.get("/profile/guide/me")
+async def my_guide_profile(user: dict = Depends(require_role("local"))):
+    guide = await db.guides.find_one({"user_id": user["id"]}, {"_id": 0})
+    return {"guide": guide}
+
+
+@api.post("/profile/guide")
+async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
+    existing = await db.guides.find_one({"user_id": user["id"]})
+    data = body.model_dump()
+    data["is_complete"] = bool(data["city"] and data["bio"] and data["price"])
+    if existing:
+        await db.guides.update_one({"user_id": user["id"]}, {"$set": data})
+        guide = await db.guides.find_one({"user_id": user["id"]}, {"_id": 0})
+    else:
+        guide_id = str(uuid.uuid4())
+        guide = {
+            "id": guide_id,
+            "user_id": user["id"],
+            "name": user["name"],
+            **data,
+            "rating": 0.0,
+            "review_count": 0,
+            "created_at": now_iso(),
+        }
+        await db.guides.insert_one(guide)
+        guide.pop("_id", None)
+    return {"guide": guide}
+
+
+# --- Bookings --------------------------------------------------------------
+@api.post("/bookings")
+async def create_booking(body: BookingIn, user: dict = Depends(require_role("traveller"))):
+    guide = await db.guides.find_one({"id": body.guide_id}, {"_id": 0})
+    if not guide:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    amount = guide["price"]
+    platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100)
+    local_payout = amount - platform_fee
+    booking = {
+        "id": str(uuid.uuid4()),
+        "guide_id": guide["id"],
+        "guide_name": guide["name"],
+        "guide_city": guide["city"],
+        "local_user_id": guide["user_id"],
+        "traveller_user_id": user["id"],
+        "traveller_name": user["name"],
+        "traveller_phone": body.traveller_phone,
+        "trip_start": body.trip_start,
+        "trip_end": body.trip_end,
+        "notes": body.notes or "",
+        "amount": amount,
+        "platform_fee": platform_fee,
+        "local_payout": local_payout,
+        "status": "pending_payment",
+        "itinerary": None,
+        "payment_released": False,
+        "created_at": now_iso(),
+    }
+    await db.bookings.insert_one(booking)
+    booking.pop("_id", None)
+    return booking
+
+
+@api.post("/bookings/{booking_id}/pay")
+async def mock_pay(booking_id: str, user: dict = Depends(require_role("traveller"))):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking or booking["traveller_user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["status"] != "pending_payment":
+        raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
+    mock_payment_id = f"pay_mock_{uuid.uuid4().hex[:16]}"
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {"status": "paid", "payment_id": mock_payment_id, "paid_at": now_iso()}},
+    )
+    return {"ok": True, "payment_id": mock_payment_id, "status": "paid"}
+
+
+@api.get("/bookings/mine")
+async def my_bookings(user: dict = Depends(get_current_user)):
+    key = "traveller_user_id" if user["role"] == "traveller" else "local_user_id"
+    if user["role"] == "admin":
+        cursor = db.bookings.find({}, {"_id": 0}).sort("created_at", -1)
+    else:
+        cursor = db.bookings.find({key: user["id"]}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(500)
+
+
+@api.get("/bookings/{booking_id}")
+async def get_booking(booking_id: str, user: dict = Depends(get_current_user)):
+    booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if user["role"] != "admin" and user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
+        raise HTTPException(status_code=403, detail="Not your booking")
+    return booking
+
+
+@api.post("/bookings/{booking_id}/itinerary")
+async def deliver_itinerary(booking_id: str, body: ItineraryIn, user: dict = Depends(require_role("local"))):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking or booking["local_user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["status"] not in ("paid", "itinerary_delivered"):
+        raise HTTPException(status_code=400, detail="Booking must be paid before delivering itinerary")
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {
+            "itinerary": {"title": body.title, "content": body.content, "delivered_at": now_iso()},
+            "status": "itinerary_delivered",
+        }},
+    )
+    return {"ok": True}
+
+
+@api.post("/bookings/{booking_id}/confirm")
+async def confirm_itinerary(booking_id: str, user: dict = Depends(require_role("traveller"))):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking or booking["traveller_user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["status"] != "itinerary_delivered":
+        raise HTTPException(status_code=400, detail="No itinerary to confirm yet")
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {"status": "completed", "payment_released": True, "completed_at": now_iso()}},
+    )
+    return {"ok": True, "payout_released": booking["local_payout"]}
+
+
+@api.post("/bookings/{booking_id}/dispute")
+async def raise_dispute(booking_id: str, body: DisputeIn, user: dict = Depends(get_current_user)):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking or user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
+        raise HTTPException(status_code=404, detail="Booking not found")
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {"status": "disputed", "dispute_reason": body.reason, "disputed_at": now_iso(), "disputed_by": user["id"]}},
+    )
+    return {"ok": True}
+
+
+# --- Messages (polling chat) -----------------------------------------------
+async def _ensure_booking_party(booking_id: str, user: dict) -> dict:
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if user["role"] != "admin" and user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
+        raise HTTPException(status_code=403, detail="Not your booking")
+    return booking
+
+
+@api.get("/bookings/{booking_id}/messages")
+async def get_messages(booking_id: str, user: dict = Depends(get_current_user)):
+    await _ensure_booking_party(booking_id, user)
+    msgs = await db.messages.find({"booking_id": booking_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return msgs
+
+
+@api.post("/bookings/{booking_id}/messages")
+async def post_message(booking_id: str, body: MessageIn, user: dict = Depends(get_current_user)):
+    await _ensure_booking_party(booking_id, user)
+    msg = {
+        "id": str(uuid.uuid4()),
+        "booking_id": booking_id,
+        "sender_id": user["id"],
+        "sender_name": user["name"],
+        "sender_role": user["role"],
+        "content": body.content.strip(),
+        "created_at": now_iso(),
+    }
+    await db.messages.insert_one(msg)
+    msg.pop("_id", None)
+    return msg
+
+
+# --- Reviews ---------------------------------------------------------------
+@api.post("/bookings/{booking_id}/review")
+async def post_review(booking_id: str, body: ReviewIn, user: dict = Depends(require_role("traveller"))):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking or booking["traveller_user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Only completed bookings can be reviewed")
+    if await db.reviews.find_one({"booking_id": booking_id}):
+        raise HTTPException(status_code=400, detail="Review already submitted")
+    review = {
+        "id": str(uuid.uuid4()),
+        "booking_id": booking_id,
+        "guide_id": booking["guide_id"],
+        "traveller_id": user["id"],
+        "traveller_name": user["name"],
+        "rating": body.rating,
+        "comment": body.comment,
+        "created_at": now_iso(),
+    }
+    await db.reviews.insert_one(review)
+    # recompute guide rating
+    agg = await db.reviews.aggregate([
+        {"$match": {"guide_id": booking["guide_id"]}},
+        {"$group": {"_id": "$guide_id", "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
+    ]).to_list(1)
+    if agg:
+        await db.guides.update_one(
+            {"id": booking["guide_id"]},
+            {"$set": {"rating": round(agg[0]["avg"], 2), "review_count": agg[0]["count"]}},
+        )
+    review.pop("_id", None)
+    return review
+
+
+# --- Admin -----------------------------------------------------------------
+@api.get("/admin/users")
+async def admin_users(user: dict = Depends(require_role("admin"))):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    return users
+
+
+@api.get("/admin/bookings")
+async def admin_bookings(user: dict = Depends(require_role("admin"))):
+    bookings = await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return bookings
+
+
+@api.get("/admin/disputes")
+async def admin_disputes(user: dict = Depends(require_role("admin"))):
+    disputes = await db.bookings.find({"status": "disputed"}, {"_id": 0}).sort("disputed_at", -1).to_list(500)
+    return disputes
+
+
+@api.post("/admin/disputes/{booking_id}/resolve")
+async def admin_resolve(booking_id: str, refund_to_traveller: bool = False, user: dict = Depends(require_role("admin"))):
+    booking = await db.bookings.find_one({"id": booking_id})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    new_status = "cancelled" if refund_to_traveller else "completed"
+    payment_released = not refund_to_traveller
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {"status": new_status, "payment_released": payment_released, "resolved_at": now_iso()}},
+    )
+    return {"ok": True, "status": new_status}
+
+
+@api.get("/admin/stats")
+async def admin_stats(user: dict = Depends(require_role("admin"))):
+    total_users = await db.users.count_documents({})
+    total_locals = await db.users.count_documents({"role": "local"})
+    total_travellers = await db.users.count_documents({"role": "traveller"})
+    total_bookings = await db.bookings.count_documents({})
+    completed = await db.bookings.count_documents({"status": "completed"})
+    disputed = await db.bookings.count_documents({"status": "disputed"})
+    agg = await db.bookings.aggregate([
+        {"$match": {"status": "completed"}},
+        {"$group": {"_id": None, "revenue": {"$sum": "$platform_fee"}, "gmv": {"$sum": "$amount"}}},
+    ]).to_list(1)
+    revenue = agg[0]["revenue"] if agg else 0
+    gmv = agg[0]["gmv"] if agg else 0
+    return {
+        "total_users": total_users,
+        "total_locals": total_locals,
+        "total_travellers": total_travellers,
+        "total_bookings": total_bookings,
+        "completed_bookings": completed,
+        "disputed_bookings": disputed,
+        "platform_revenue": revenue,
+        "gmv": gmv,
+    }
+
+
+# --- Health ----------------------------------------------------------------
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"ok": True, "service": "localink"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
-
-# Include the router in the main app
-app.include_router(api_router)
+app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown() -> None:
     client.close()
