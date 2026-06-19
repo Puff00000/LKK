@@ -13,18 +13,20 @@ export default function Register() {
   const [searchParams] = useSearchParams();
   const roleParam = searchParams.get("role");
   const lockedRole = roleParam === "local" || roleParam === "traveller" ? roleParam : null;
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    password: "",
-    role: lockedRole || "traveller",
-  });
+
+  // form holds name/email/password + the role when no URL lock is active.
+  // When a URL lock IS active, the role is taken from the URL on every render,
+  // so navigating between /register?role=local and /register?role=traveller
+  // updates the page immediately even though the component does not remount.
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "traveller" });
+  const role = lockedRole || form.role;
+  const isLocal = role === "local";
   const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    const res = await register(form);
+    const res = await register({ ...form, role });
     setSubmitting(false);
     if (!res.ok) {
       toast.error(res.error);
@@ -35,8 +37,7 @@ export default function Register() {
     else navigate("/dashboard");
   };
 
-  const isLocal = form.role === "local";
-  const headlineKicker = lockedRole
+  const headline = lockedRole
     ? isLocal
       ? "Sign up as a Local"
       : "Sign up as a Traveller"
@@ -63,7 +64,9 @@ export default function Register() {
             {isLocal ? "I am a Local" : "I am a Traveller"}
           </div>
         )}
-        <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900">{headlineKicker}</h1>
+        <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900" data-testid="register-headline">
+          {headline}
+        </h1>
         <p className="mt-2 text-stone-600">{subline}</p>
 
         <form onSubmit={onSubmit} className="mt-8 space-y-5">

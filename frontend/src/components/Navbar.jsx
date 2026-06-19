@@ -17,7 +17,6 @@ const Logo = () => (
       <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500" />
       LKK
     </span>
-    <span className="font-display text-lg text-stone-900 leading-none">LKK</span>
   </Link>
 );
 

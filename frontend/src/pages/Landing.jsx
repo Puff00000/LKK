@@ -38,8 +38,9 @@ const Marigold = ({ className = "" }) => (
   </svg>
 );
 
-// The melting headline: starts as chunky Bagel Fat One bubble,
-// gradually transitions through heavy Outfit weights to thin clean.
+// The melting headline: every letter uses the chunky Bagel Fat One bubble font,
+// but progressively gets smaller, opens up its tracking, and squashes (scaleY ↓)
+// to feel like the letterforms are physically melting/dissolving toward the end.
 function MeltHeadline({ text }) {
   const chars = text.split("");
   const total = chars.length;
@@ -47,32 +48,31 @@ function MeltHeadline({ text }) {
     <h2
       data-testid="melt-headline"
       aria-label={text}
-      className="melt-headline select-none text-stone-900"
+      className="melt-headline select-none text-green-900"
+      style={{ fontFamily: "'Bagel Fat One', serif" }}
     >
       {chars.map((ch, i) => {
         const ratio = i / Math.max(total - 1, 1); // 0 → 1 left to right
-        // 0 - 0.30 chunky bubble; 0.30 - 0.60 heavy Outfit; 0.60+ light Outfit
-        const stage = ratio < 0.3 ? 0 : ratio < 0.6 ? 1 : 2;
-        const family =
-          stage === 0
-            ? "'Bagel Fat One', serif"
-            : "'Outfit', sans-serif";
-        const weight = stage === 0 ? 400 : stage === 1 ? 900 - Math.round((ratio - 0.3) * 600) : 500 - Math.round((ratio - 0.6) * 250);
-        // letter size shrinks slightly + tracking opens up as we move right
-        const sizeFactor = 1 - ratio * 0.32;
-        const tracking = ratio < 0.35 ? "-0.04em" : `${(ratio - 0.35) * 0.08}em`;
-        // tiny baseline drift to make it feel like its melting away
-        const drop = ratio < 0.3 ? `${(0.3 - ratio) * 4}px` : "0";
+        // size shrinks from 1.0em → 0.55em
+        const sizeFactor = 1 - ratio * 0.45;
+        // vertical squish: chars get progressively shorter, like melting
+        const scaleY = 1 - ratio * 0.35;
+        // tracking opens up gently
+        const tracking = `${-0.04 + ratio * 0.1}em`;
+        // baseline drift downward as we go right
+        const drop = `${ratio * 6}px`;
+        // colour fades from deep green → muted stone
+        const color = ratio < 0.4 ? "#14532d" : ratio < 0.75 ? "#166534" : "#3f3f46";
         return (
           <span
             key={i}
             style={{
-              fontFamily: family,
-              fontWeight: weight,
+              fontFamily: "'Bagel Fat One', serif",
               fontSize: `${sizeFactor}em`,
               letterSpacing: tracking,
-              transform: `translateY(${drop})`,
-              color: ratio < 0.3 ? "#14532d" : ratio < 0.6 ? "#166534" : "#1c1917",
+              transform: `translateY(${drop}) scaleY(${scaleY})`,
+              transformOrigin: "bottom center",
+              color,
             }}
           >
             {ch === " " ? "\u00A0" : ch}
