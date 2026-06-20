@@ -2,8 +2,12 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, inr } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import { Star, MapPin, Languages, Sparkles, ArrowLeft } from "lucide-react";
+import { Star, MapPin, Languages, Sparkles, ArrowLeft, ShieldCheck, ShieldAlert } from "lucide-react";
+
+const API_URL = process.env.REACT_APP_BACKEND_URL;
+const absoluteUrl = (u) => (!u ? "" : u.startsWith("http") ? u : `${API_URL}${u}`);
 
 export default function GuideProfile() {
   const { id } = useParams();
@@ -45,7 +49,7 @@ export default function GuideProfile() {
           <div className="flex items-start gap-5">
             <div className="h-20 w-20 shrink-0 overflow-hidden rounded-full ring-1 ring-stone-200">
               {guide.avatar_url ? (
-                <img src={guide.avatar_url} alt={guide.name} className="h-full w-full object-cover" />
+                <img src={absoluteUrl(guide.avatar_url)} alt={guide.name} className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full w-full place-items-center bg-green-50 font-heading text-2xl text-green-800">
                   {guide.name?.[0]}
@@ -53,7 +57,18 @@ export default function GuideProfile() {
               )}
             </div>
             <div className="min-w-0">
-              <h1 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">{guide.name}</h1>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">{guide.name}</h1>
+                {guide.verified ? (
+                  <Badge data-testid="guide-verified" className="bg-green-800 text-white hover:bg-green-800 gap-1">
+                    <ShieldCheck className="h-3.5 w-3.5" /> Verified
+                  </Badge>
+                ) : (
+                  <Badge data-testid="guide-unverified" variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
+                    <ShieldAlert className="h-3.5 w-3.5" /> Unverified
+                  </Badge>
+                )}
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-stone-600">
                 <span className="inline-flex items-center gap-1"><MapPin className="h-4 w-4 text-green-700" /> {guide.city}</span>
                 <span className="inline-flex items-center gap-1"><Star className="h-4 w-4 fill-green-700 text-green-700" /> {guide.rating?.toFixed(1) || "New"} · {guide.review_count || 0} reviews</span>

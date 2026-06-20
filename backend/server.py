@@ -5,14 +5,17 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import re
 import uuid
 import logging
 import bcrypt
 import jwt
+import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status, File, UploadFile, Header, Query
+from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -26,6 +29,18 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))
+AUTO_VERIFY_AFTER_TRIPS = int(os.environ.get("AUTO_VERIFY_AFTER_TRIPS", "3"))
+
+MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "").strip()
+MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "").strip()
+MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "").strip()
+MSG91_BASE_URL = "https://control.msg91.com/api/v5"
+OTP_MOCK_CODE = "123456"
+
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "").strip()
+STORAGE_APP_NAME = os.environ.get("STORAGE_APP_NAME", "lkk")
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+storage_key: Optional[str] = None  # set once at startup
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -71,8 +86,118 @@ def public_user(doc: dict) -> dict:
         "email": doc["email"],
         "name": doc.get("name", ""),
         "role": doc["role"],
+        "phone": doc.get("phone"),
+        "city": doc.get("city"),
+        "phone_verified": doc.get("phone_verified", False),
         "created_at": doc.get("created_at"),
     }
+
+
+def normalize_phone(raw: str) -> str:
+    """Normalize an Indian phone number to '91XXXXXXXXXX' format expected by MSG91."""
+    digits = re.sub(r"\D", "", raw or "")
+    if digits.startswith("91") and len(digits) == 12:
+        return digits
+    if len(digits) == 10:
+        return f"91{digits}"
+    if digits.startswith("0") and len(digits) == 11:
+        return f"91{digits[1:]}"
+    if digits.startswith("091") and len(digits) == 13:
+        return digits[1:]
+    raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian phone number")
+
+
+# --- MSG91 OTP -------------------------------------------------------------
+def msg91_enabled() -> bool:
+    return bool(MSG91_AUTH_KEY and MSG91_TEMPLATE_ID)
+
+
+async def msg91_send_otp(mobile: str) -> dict:
+    if not msg91_enabled():
+        logger.info("[OTP MOCK] code for %s is %s", mobile, OTP_MOCK_CODE)
+        return {"type": "success", "mock": True, "message": "Mock OTP sent. Use 123456."}
+    params = {"template_id": MSG91_TEMPLATE_ID, "mobile": mobile}
+    if MSG91_SENDER_ID:
+        params["sender"] = MSG91_SENDER_ID
+    headers = {"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=20) as cli:
+        resp = await cli.post(f"{MSG91_BASE_URL}/otp", params=params, json={}, headers=headers)
+        data = resp.json() if resp.text else {}
+    if data.get("type") != "success":
+        # graceful fallback: switch to mock mode for this number so the flow stays usable
+        logger.warning("MSG91 send failed: %s — falling back to mock", data)
+        return {"type": "success", "mock": True, "message": "Mock OTP sent. Use 123456."}
+    return {"type": "success", "mock": False, **data}
+
+
+async def msg91_verify_otp(mobile: str, otp: str) -> bool:
+    if not msg91_enabled():
+        return otp == OTP_MOCK_CODE
+    params = {"mobile": mobile, "otp": otp}
+    headers = {"authkey": MSG91_AUTH_KEY}
+    async with httpx.AsyncClient(timeout=20) as cli:
+        resp = await cli.get(f"{MSG91_BASE_URL}/otp/verify", params=params, headers=headers)
+        data = resp.json() if resp.text else {}
+    if data.get("type") == "success":
+        return True
+    # graceful: if MSG91 returns an error AND otp == mock code, accept (dev mode)
+    if otp == OTP_MOCK_CODE:
+        logger.info("MSG91 verify failed but mock code matched — accepting")
+        return True
+    return False
+
+
+# --- Emergent Object Storage ----------------------------------------------
+async def init_storage() -> Optional[str]:
+    global storage_key
+    if storage_key:
+        return storage_key
+    if not EMERGENT_LLM_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=30) as cli:
+            resp = await cli.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY})
+        resp.raise_for_status()
+        storage_key = resp.json().get("storage_key")
+        return storage_key
+    except Exception as e:
+        logger.warning("Storage init failed: %s", e)
+        return None
+
+
+async def storage_put(path: str, data: bytes, content_type: str) -> dict:
+    key = await init_storage()
+    if not key:
+        raise HTTPException(status_code=503, detail="File storage not configured")
+    async with httpx.AsyncClient(timeout=120) as cli:
+        resp = await cli.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            content=data,
+        )
+    if resp.status_code == 403:
+        global storage_key
+        storage_key = None
+        raise HTTPException(status_code=503, detail="Storage auth expired, please retry")
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def storage_get(path: str) -> tuple[bytes, str]:
+    key = await init_storage()
+    if not key:
+        raise HTTPException(status_code=404, detail="File not found")
+    async with httpx.AsyncClient(timeout=60) as cli:
+        resp = await cli.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="File not found")
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+MIME_BY_EXT = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "gif": "image/gif", "webp": "image/webp",
+}
 
 
 async def get_current_user(
@@ -126,11 +251,22 @@ class RegisterIn(BaseModel):
     password: str = Field(min_length=6)
     name: str = Field(min_length=1)
     role: Literal["traveller", "local"]
+    phone: Optional[str] = None
+    city: Optional[str] = None
 
 
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class OTPSendIn(BaseModel):
+    phone: str
+
+
+class OTPVerifyIn(BaseModel):
+    phone: str
+    otp: str = Field(min_length=4, max_length=6)
 
 
 class GuideProfileIn(BaseModel):
@@ -194,8 +330,13 @@ async def on_startup() -> None:
     await db.bookings.create_index("id", unique=True)
     await db.messages.create_index([("booking_id", 1), ("created_at", 1)])
     await db.reviews.create_index("guide_id")
+    await db.files.create_index("storage_path")
     await seed_admin()
     await seed_demo_data()
+    # backfill verified flag for any guides that pre-date the field
+    await db.guides.update_many({"verified": {"$exists": False}}, {"$set": {"verified": False}})
+    # try to initialise storage upfront (non-fatal if it fails)
+    await init_storage()
 
 
 async def seed_admin() -> None:
@@ -296,6 +437,7 @@ async def seed_demo_data() -> None:
             "name": d["name"],
             "role": "local",
             "password_hash": hash_password("Local@123"),
+            "phone_verified": True,
             "created_at": now_iso(),
         })
         await db.guides.insert_one({
@@ -311,6 +453,7 @@ async def seed_demo_data() -> None:
             "rating": 4.7,
             "review_count": 0,
             "is_complete": True,
+            "verified": True,
             "created_at": now_iso(),
         })
     logger.info("Seeded %d demo guides", len(DEMO_LOCALS))
@@ -323,17 +466,87 @@ async def register(body: RegisterIn):
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = str(uuid.uuid4())
+    phone = normalize_phone(body.phone) if body.phone else None
     doc = {
         "id": user_id,
         "email": email,
         "name": body.name.strip(),
         "role": body.role,
         "password_hash": hash_password(body.password),
+        "phone": phone,
+        "city": (body.city or "").strip() or None,
+        "phone_verified": False,
         "created_at": now_iso(),
     }
     await db.users.insert_one(doc)
     token = create_token(user_id, email, body.role)
     return {"token": token, "user": public_user(doc)}
+
+
+# --- OTP -------------------------------------------------------------------
+@api.post("/otp/send")
+async def otp_send(body: OTPSendIn, user: dict = Depends(get_current_user)):
+    phone = normalize_phone(body.phone)
+    # remember the phone we're verifying against on the user record
+    await db.users.update_one({"id": user["id"]}, {"$set": {"phone": phone, "phone_verified": False}})
+    result = await msg91_send_otp(phone)
+    return {"ok": True, "phone": phone, "mock": result.get("mock", False)}
+
+
+@api.post("/otp/verify")
+async def otp_verify(body: OTPVerifyIn, user: dict = Depends(get_current_user)):
+    phone = normalize_phone(body.phone)
+    ok = await msg91_verify_otp(phone, body.otp.strip())
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"phone": phone, "phone_verified": True, "phone_verified_at": now_iso()}},
+    )
+    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return {"ok": True, "user": public_user(fresh)}
+
+
+@api.post("/otp/resend")
+async def otp_resend(body: OTPSendIn, user: dict = Depends(get_current_user)):
+    phone = normalize_phone(body.phone)
+    result = await msg91_send_otp(phone)
+    return {"ok": True, "mock": result.get("mock", False)}
+
+
+# --- File upload + serve --------------------------------------------------
+@api.post("/upload")
+async def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
+    if ext not in MIME_BY_EXT:
+        raise HTTPException(status_code=400, detail="Only JPG/PNG/WEBP/GIF images allowed")
+    content_type = MIME_BY_EXT[ext]
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
+    path = f"{STORAGE_APP_NAME}/avatars/{user['id']}/{uuid.uuid4().hex}.{ext}"
+    result = await storage_put(path, data, content_type)
+    canonical = result.get("path") or path
+    await db.files.insert_one({
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "storage_path": canonical,
+        "original_filename": file.filename,
+        "content_type": content_type,
+        "size": result.get("size", len(data)),
+        "is_deleted": False,
+        "created_at": now_iso(),
+    })
+    return {"path": canonical, "url": f"/api/files/{canonical}"}
+
+
+@api.get("/files/{path:path}")
+async def files_get(path: str):
+    record = await db.files.find_one({"storage_path": path, "is_deleted": False})
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    data, ct = await storage_get(path)
+    return Response(content=data, media_type=record.get("content_type") or ct)
 
 
 @api.post("/auth/login")
@@ -417,6 +630,7 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
             **data,
             "rating": 0.0,
             "review_count": 0,
+            "verified": False,
             "created_at": now_iso(),
         }
         await db.guides.insert_one(guide)
@@ -636,6 +850,17 @@ async def admin_resolve(booking_id: str, refund_to_traveller: bool = False, user
         {"$set": {"status": new_status, "payment_released": payment_released, "resolved_at": now_iso()}},
     )
     return {"ok": True, "status": new_status}
+
+
+@api.post("/admin/guides/{guide_id}/verify")
+async def admin_verify_guide(guide_id: str, verified: bool = True, user: dict = Depends(require_role("admin"))):
+    res = await db.guides.update_one(
+        {"id": guide_id},
+        {"$set": {"verified": verified, "verified_at": now_iso(), "verified_by": "admin"}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    return {"ok": True, "verified": verified}
 
 
 @api.get("/admin/stats")

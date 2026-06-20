@@ -1,8 +1,12 @@
 import { Link } from "react-router-dom";
-import { Star, MapPin } from "lucide-react";
+import { Star, MapPin, ShieldCheck, ShieldAlert } from "lucide-react";
 import { inr } from "@/lib/api";
 
+const API_URL = process.env.REACT_APP_BACKEND_URL;
+const absoluteUrl = (u) => (!u ? "" : u.startsWith("http") ? u : `${API_URL}${u}`);
+
 export default function GuideCard({ guide }) {
+  const verified = guide.verified === true;
   return (
     <Link
       to={`/guides/${guide.id}`}
@@ -12,7 +16,7 @@ export default function GuideCard({ guide }) {
       <div className="flex items-start gap-4">
         <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-green-50 ring-1 ring-stone-200">
           {guide.avatar_url ? (
-            <img src={guide.avatar_url} alt={guide.name} className="h-full w-full object-cover" />
+            <img src={absoluteUrl(guide.avatar_url)} alt={guide.name} className="h-full w-full object-cover" />
           ) : (
             <div className="grid h-full w-full place-items-center font-heading text-xl text-green-800">
               {guide.name?.[0]}
@@ -20,9 +24,20 @@ export default function GuideCard({ guide }) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="font-heading text-lg font-semibold text-stone-900 group-hover:text-green-800">
-            {guide.name}
-          </h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-heading text-lg font-semibold text-stone-900 group-hover:text-green-800">
+              {guide.name}
+            </h3>
+            {verified ? (
+              <span title="Verified" data-testid={`verified-${guide.id}`}>
+                <ShieldCheck className="h-4 w-4 text-green-700" />
+              </span>
+            ) : (
+              <span title="Unverified" data-testid={`unverified-${guide.id}`}>
+                <ShieldAlert className="h-4 w-4 text-amber-500" />
+              </span>
+            )}
+          </div>
           <div className="mt-1 flex items-center gap-1 text-sm text-stone-500">
             <MapPin className="h-3.5 w-3.5" />
             {guide.city}
