@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, ShieldAlert, Upload } from "lucide-react";
+import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, MessageCircle, Sparkles } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -186,20 +186,65 @@ export default function GuideProfileEdit() {
           <Input id="specialities" data-testid="profile-specialities" value={form.specialities} onChange={(e) => setForm({ ...form, specialities: e.target.value })} placeholder="Street food, heritage walks, photography" className="mt-1.5" />
         </div>
         <div>
-          <Label>Package price · <span className="text-green-800 font-semibold">₹{form.price}</span></Label>
-          <div className="mt-3 px-1">
-            <Slider
-              data-testid="profile-price"
-              min={199}
-              max={1999}
-              step={50}
-              value={[form.price]}
-              onValueChange={([v]) => setForm({ ...form, price: v })}
-            />
-            <div className="mt-1.5 flex justify-between text-xs text-stone-500">
-              <span>₹199 · chat-only</span><span>₹499+/day · in-person</span>
-            </div>
-          </div>
+          <Label>Package price</Label>
+          <p className="mt-1 text-xs text-stone-500">Pick one tier. You can change it later.</p>
+          <RadioGroup
+            data-testid="profile-price-tier"
+            value={String(form.price)}
+            onValueChange={(v) => setForm({ ...form, price: Number(v) })}
+            className="mt-3 grid gap-3 sm:grid-cols-2"
+          >
+            <label
+              htmlFor="tier-199"
+              data-testid="tier-199-option"
+              className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-colors ${
+                form.price === 199 ? "border-amber-500 bg-amber-50" : "border-stone-200 bg-white hover:border-amber-200"
+              }`}
+            >
+              <RadioGroupItem value="199" id="tier-199" className="sr-only" />
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
+                <MessageCircle className="h-4 w-4" /> Chat-only
+              </div>
+              <div className="mt-3 flex items-baseline gap-1 font-heading">
+                <span className="text-3xl font-bold text-stone-900">₹199</span>
+                <span className="text-xs text-stone-500">/ one-time</span>
+              </div>
+              <p className="mt-3 text-sm text-stone-700 leading-relaxed">
+                Send a custom written itinerary and answer the traveller's questions on chat. No in-person meet-up.
+              </p>
+              <ul className="mt-3 space-y-1 text-xs text-stone-600">
+                <li>✓ Day-by-day itinerary in writing</li>
+                <li>✓ In-app chat before & during their trip</li>
+                <li className="text-stone-400">✗ No in-person guidance</li>
+              </ul>
+            </label>
+
+            <label
+              htmlFor="tier-499"
+              data-testid="tier-499-option"
+              className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-colors ${
+                form.price === 499 ? "border-green-700 bg-green-50" : "border-stone-200 bg-white hover:border-green-200"
+              }`}
+            >
+              <RadioGroupItem value="499" id="tier-499" className="sr-only" />
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
+                <Sparkles className="h-4 w-4" /> In-person
+              </div>
+              <div className="mt-3 flex items-baseline gap-1 font-heading">
+                <span className="text-3xl font-bold text-stone-900">₹499</span>
+                <span className="text-xs text-stone-500">/ per day</span>
+              </div>
+              <p className="mt-3 text-sm text-stone-700 leading-relaxed">
+                Everything in chat-only — plus you walk the city with them, booked per day when you both agree on the
+                plan.
+              </p>
+              <ul className="mt-3 space-y-1 text-xs text-stone-600">
+                <li>✓ Day-by-day itinerary in writing</li>
+                <li>✓ In-app chat throughout</li>
+                <li>✓ Full in-person guidance during their trip</li>
+              </ul>
+            </label>
+          </RadioGroup>
         </div>
 
         <Button type="submit" data-testid="profile-save" disabled={saving} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
