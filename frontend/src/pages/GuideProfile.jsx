@@ -4,7 +4,7 @@ import { api, inr } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import { Star, MapPin, Languages, Sparkles, ArrowLeft, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Star, MapPin, Languages, Sparkles, ArrowLeft, ShieldCheck, ShieldAlert, MessageCircle } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 const absoluteUrl = (u) => (!u ? "" : u.startsWith("http") ? u : `${API_URL}${u}`);
@@ -28,11 +28,14 @@ export default function GuideProfile() {
 
   const { guide, reviews } = data;
 
-  const handleBook = () => {
-    if (!user) return navigate(`/login?next=/book/${guide.id}`);
+  const handleBook = (tier) => {
+    if (!user) return navigate(`/login?next=/book/${guide.id}?tier=${tier}`);
     if (user.role !== "traveller") return navigate("/");
-    navigate(`/book/${guide.id}`);
+    navigate(`/book/${guide.id}?tier=${tier}`);
   };
+
+  const offersChat = guide.offers_chat !== false;
+  const offersInPerson = guide.offers_in_person === true;
 
   return (
     <div data-testid="guide-profile-page" className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8">
@@ -119,22 +122,54 @@ export default function GuideProfile() {
           </div>
         </div>
 
-        {/* Book card */}
-        <aside className="rounded-2xl border border-stone-200 bg-white p-6 lg:sticky lg:top-24">
-          <div className="text-xs uppercase tracking-[0.2em] text-stone-500">Package</div>
-          <div className="mt-2 font-heading text-4xl font-bold text-stone-900">{inr(guide.price)}</div>
-          <div className="mt-1 text-sm text-stone-500">Custom itinerary + in-app chat</div>
-          <Button
-            data-testid="book-now-btn"
-            onClick={handleBook}
-            className="mt-6 w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
-          >
-            Book now
-          </Button>
-          <ul className="mt-6 space-y-2 text-sm text-stone-600">
+        {/* Book card(s) */}
+        <aside className="space-y-4 lg:sticky lg:top-24" data-testid="booking-tiers">
+          {offersChat && (
+            <div className="rounded-2xl border-2 border-amber-300 bg-white p-5" data-testid="tier-chat-card">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
+                <MessageCircle className="h-4 w-4" /> Chat-only
+              </div>
+              <div className="mt-2 flex items-baseline gap-1 font-heading">
+                <span className="text-3xl font-bold text-stone-900">{inr(199)}</span>
+                <span className="text-xs text-stone-500">/ one-time</span>
+              </div>
+              <p className="mt-2 text-sm text-stone-600 leading-relaxed">
+                Custom itinerary in writing + in-app chat with {guide.name.split(" ")[0]} before & during your trip.
+              </p>
+              <Button
+                data-testid="book-chat-btn"
+                onClick={() => handleBook("chat")}
+                className="mt-4 w-full h-11 bg-amber-600 text-white hover:bg-amber-700 hover:text-white"
+              >
+                Book chat-only
+              </Button>
+            </div>
+          )}
+          {offersInPerson && (
+            <div className="rounded-2xl border-2 border-green-700 bg-white p-5" data-testid="tier-in-person-card">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
+                <Sparkles className="h-4 w-4" /> In-person
+              </div>
+              <div className="mt-2 flex items-baseline gap-1 font-heading">
+                <span className="text-3xl font-bold text-stone-900">{inr(499)}</span>
+                <span className="text-xs text-stone-500">/ per day</span>
+              </div>
+              <p className="mt-2 text-sm text-stone-600 leading-relaxed">
+                Everything in chat-only — plus {guide.name.split(" ")[0]} walks the city with you, booked per day.
+              </p>
+              <Button
+                data-testid="book-in-person-btn"
+                onClick={() => handleBook("in_person")}
+                className="mt-4 w-full h-11 bg-green-800 text-white hover:bg-green-900 hover:text-white"
+              >
+                Book in-person
+              </Button>
+            </div>
+          )}
+          <ul className="rounded-xl border border-stone-200 bg-stone-50 p-4 space-y-2 text-xs text-stone-600">
             <li>✓ Payment held until itinerary received</li>
-            <li>✓ Optional in-person meetup</li>
-            <li>✓ In-app chat with {guide.name.split(" ")[0]}</li>
+            <li>✓ Dispute resolution within 24 hours</li>
+            <li>✓ 90% of every booking goes to your local</li>
           </ul>
         </aside>
       </div>

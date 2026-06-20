@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, MessageCircle, Sparkles } from "lucide-react";
 
@@ -27,7 +27,8 @@ export default function GuideProfileEdit() {
     bio: "",
     languages: "",
     specialities: "",
-    price: 499,
+    offers_chat: true,
+    offers_in_person: false,
     avatar_url: "",
   });
   const [guide, setGuide] = useState(null);
@@ -55,6 +56,10 @@ export default function GuideProfileEdit() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!form.offers_chat && !form.offers_in_person) {
+      toast.error("Turn on at least one package tier");
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await api.post("/profile/guide", {
@@ -62,7 +67,8 @@ export default function GuideProfileEdit() {
         bio: form.bio.trim(),
         languages: form.languages.split(",").map((x) => x.trim()).filter(Boolean),
         specialities: form.specialities.split(",").map((x) => x.trim()).filter(Boolean),
-        price: Number(form.price),
+        offers_chat: form.offers_chat,
+        offers_in_person: form.offers_in_person,
         avatar_url: form.avatar_url.trim() || null,
       });
       setGuide(data.guide);
@@ -186,65 +192,78 @@ export default function GuideProfileEdit() {
           <Input id="specialities" data-testid="profile-specialities" value={form.specialities} onChange={(e) => setForm({ ...form, specialities: e.target.value })} placeholder="Street food, heritage walks, photography" className="mt-1.5" />
         </div>
         <div>
-          <Label>Package price</Label>
-          <p className="mt-1 text-xs text-stone-500">Pick one tier. You can change it later.</p>
-          <RadioGroup
-            data-testid="profile-price-tier"
-            value={String(form.price)}
-            onValueChange={(v) => setForm({ ...form, price: Number(v) })}
-            className="mt-3 grid gap-3 sm:grid-cols-2"
-          >
-            <label
-              htmlFor="tier-199"
-              data-testid="tier-199-option"
-              className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-colors ${
-                form.price === 199 ? "border-amber-500 bg-amber-50" : "border-stone-200 bg-white hover:border-amber-200"
+          <Label>Package tiers</Label>
+          <p className="mt-1 text-xs text-stone-500">Turn on each tier you want to offer. At least one must be on.</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {/* CHAT-ONLY ₹199 */}
+            <div
+              data-testid="tier-199-card"
+              data-active={form.offers_chat}
+              className={`relative rounded-2xl border-2 p-5 transition-colors ${
+                form.offers_chat ? "border-amber-500 bg-amber-50" : "border-stone-200 bg-white"
               }`}
             >
-              <RadioGroupItem value="199" id="tier-199" className="sr-only" />
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
-                <MessageCircle className="h-4 w-4" /> Chat-only
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
+                  <MessageCircle className="h-4 w-4" /> Chat-only
+                </div>
+                <Switch
+                  data-testid="tier-199-toggle"
+                  checked={form.offers_chat}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, offers_chat: v }))}
+                  className="data-[state=checked]:bg-amber-600"
+                />
               </div>
               <div className="mt-3 flex items-baseline gap-1 font-heading">
                 <span className="text-3xl font-bold text-stone-900">₹199</span>
                 <span className="text-xs text-stone-500">/ one-time</span>
               </div>
               <p className="mt-3 text-sm text-stone-700 leading-relaxed">
-                Send a custom written itinerary and answer the traveller's questions on chat. No in-person meet-up.
+                Send a custom written itinerary and answer questions on chat. No in-person meet-up.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-stone-600">
                 <li>✓ Day-by-day itinerary in writing</li>
-                <li>✓ In-app chat before & during their trip</li>
+                <li>✓ In-app chat before & during trip</li>
                 <li className="text-stone-400">✗ No in-person guidance</li>
               </ul>
-            </label>
+            </div>
 
-            <label
-              htmlFor="tier-499"
-              data-testid="tier-499-option"
-              className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-colors ${
-                form.price === 499 ? "border-green-700 bg-green-50" : "border-stone-200 bg-white hover:border-green-200"
+            {/* IN-PERSON ₹499/day */}
+            <div
+              data-testid="tier-499-card"
+              data-active={form.offers_in_person}
+              className={`relative rounded-2xl border-2 p-5 transition-colors ${
+                form.offers_in_person ? "border-green-700 bg-green-50" : "border-stone-200 bg-white"
               }`}
             >
-              <RadioGroupItem value="499" id="tier-499" className="sr-only" />
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
-                <Sparkles className="h-4 w-4" /> In-person
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
+                  <Sparkles className="h-4 w-4" /> In-person
+                </div>
+                <Switch
+                  data-testid="tier-499-toggle"
+                  checked={form.offers_in_person}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, offers_in_person: v }))}
+                  className="data-[state=checked]:bg-green-700"
+                />
               </div>
               <div className="mt-3 flex items-baseline gap-1 font-heading">
                 <span className="text-3xl font-bold text-stone-900">₹499</span>
                 <span className="text-xs text-stone-500">/ per day</span>
               </div>
               <p className="mt-3 text-sm text-stone-700 leading-relaxed">
-                Everything in chat-only — plus you walk the city with them, booked per day when you both agree on the
-                plan.
+                Everything in chat-only — plus you walk the city with them, booked per day when you both agree.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-stone-600">
                 <li>✓ Day-by-day itinerary in writing</li>
                 <li>✓ In-app chat throughout</li>
                 <li>✓ Full in-person guidance during their trip</li>
               </ul>
-            </label>
-          </RadioGroup>
+            </div>
+          </div>
+          {!form.offers_chat && !form.offers_in_person && (
+            <p className="mt-2 text-xs text-red-600" data-testid="tier-error">Turn on at least one tier to save your profile.</p>
+          )}
         </div>
 
         <Button type="submit" data-testid="profile-save" disabled={saving} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">

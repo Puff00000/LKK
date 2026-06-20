@@ -274,7 +274,8 @@ class GuideProfileIn(BaseModel):
     bio: str
     languages: List[str] = []
     specialities: List[str] = []
-    price: int = Field(ge=199, le=1999)
+    offers_chat: bool = True
+    offers_in_person: bool = False
     avatar_url: Optional[str] = None
 
 
@@ -294,12 +295,18 @@ class GuideProfileOut(BaseModel):
     is_complete: bool = False
 
 
+PRICE_CHAT = 199
+PRICE_IN_PERSON_PER_DAY = 499
+
+
 class BookingIn(BaseModel):
     guide_id: str
     trip_start: str
     trip_end: str
     traveller_phone: str
     notes: Optional[str] = ""
+    package_type: Literal["chat", "in_person"] = "chat"
+    days: int = Field(default=1, ge=1, le=30)
 
 
 class ItineraryIn(BaseModel):
@@ -335,6 +342,17 @@ async def on_startup() -> None:
     await seed_demo_data()
     # backfill verified flag for any guides that pre-date the field
     await db.guides.update_many({"verified": {"$exists": False}}, {"$set": {"verified": False}})
+    # backfill tier flags for legacy guides — default: both tiers ON
+    await db.guides.update_many(
+        {"offers_chat": {"$exists": False}},
+        {"$set": {"offers_chat": True, "offers_in_person": True, "price": 199}},
+    )
+    # mark the 6 demo locals (lk seed) as verified for a polished demo UX
+    demo_emails = [d["email"] for d in DEMO_LOCALS]
+    demo_users = await db.users.find({"email": {"$in": demo_emails}}, {"id": 1, "_id": 0}).to_list(20)
+    demo_ids = [u["id"] for u in demo_users]
+    if demo_ids:
+        await db.guides.update_many({"user_id": {"$in": demo_ids}}, {"$set": {"verified": True}})
     # try to initialise storage upfront (non-fatal if it fails)
     await init_storage()
 
@@ -448,7 +466,9 @@ async def seed_demo_data() -> None:
             "bio": d["bio"],
             "languages": d["languages"],
             "specialities": d["specialities"],
-            "price": d["price"],
+            "price": 199,
+            "offers_chat": True,
+            "offers_in_person": True,
             "avatar_url": d["avatar_url"],
             "rating": 4.7,
             "review_count": 0,
@@ -615,9 +635,13 @@ async def my_guide_profile(user: dict = Depends(require_role("local"))):
 
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
+    if not body.offers_chat and not body.offers_in_person:
+        raise HTTPException(status_code=400, detail="Turn on at least one package tier")
     existing = await db.guides.find_one({"user_id": user["id"]})
     data = body.model_dump()
-    data["is_complete"] = bool(data["city"] and data["bio"] and data["price"])
+    # store the cheapest active tier as `price` for sorting / "starting at" labels
+    data["price"] = PRICE_CHAT if data["offers_chat"] else PRICE_IN_PERSON_PER_DAY
+    data["is_complete"] = bool(data["city"] and data["bio"] and (data["offers_chat"] or data["offers_in_person"]))
     if existing:
         await db.guides.update_one({"user_id": user["id"]}, {"$set": data})
         guide = await db.guides.find_one({"user_id": user["id"]}, {"_id": 0})
@@ -644,7 +668,17 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
     guide = await db.guides.find_one({"id": body.guide_id}, {"_id": 0})
     if not guide:
         raise HTTPException(status_code=404, detail="Guide not found")
-    amount = guide["price"]
+    # Validate the guide actually offers this tier
+    if body.package_type == "chat":
+        if guide.get("offers_chat", True) is False:
+            raise HTTPException(status_code=400, detail="This guide does not offer chat-only")
+        amount = PRICE_CHAT
+        days = 1
+    else:
+        if guide.get("offers_in_person", False) is False:
+            raise HTTPException(status_code=400, detail="This guide does not offer in-person")
+        days = max(1, int(body.days))
+        amount = PRICE_IN_PERSON_PER_DAY * days
     platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100)
     local_payout = amount - platform_fee
     booking = {
@@ -659,6 +693,8 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
         "trip_start": body.trip_start,
         "trip_end": body.trip_end,
         "notes": body.notes or "",
+        "package_type": body.package_type,
+        "days": days,
         "amount": amount,
         "platform_fee": platform_fee,
         "local_payout": local_payout,
