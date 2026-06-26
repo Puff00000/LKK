@@ -69,7 +69,7 @@ export default function Landing() {
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-14 pb-20 sm:pt-20 sm:pb-28">
           {/* THE MELT HEADLINE — single hero anchor */}
           <div className="text-[clamp(48px,8.5vw,128px)] leading-none">
-            <MeltHeadline text="lok kya kahenge" />
+            <MeltHeadline text="log kya kahenge" />
           </div>
 
           <div className="mt-8 grid lg:grid-cols-12 gap-10 items-end">
