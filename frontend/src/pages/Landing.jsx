@@ -323,16 +323,17 @@ export default function Landing() {
       </section>
 
       {/* FOOTER */}
-      <footer className="bg-stone-50 border-t border-stone-200">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-sm text-stone-500">
-          <div className="font-display text-base text-stone-900">LKK · © {new Date().getFullYear()}</div>
-          <div className="flex gap-6">
-            <a href="#how" className="hover:text-green-800">How it works</a>
-            <a href="#pricing" className="hover:text-green-800">Pricing</a>
-            <Link to="/login" className="hover:text-green-800">Log in</Link>
-          </div>
-        </div>
-      </footer>
+     {/* FOOTER */}
+<footer className="bg-stone-50 border-t border-stone-200">
+  <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-stone-500">
+    <div>LKK © {new Date().getFullYear()} · All rights reserved</div>
+    <div className="flex gap-6">
+      <span className="cursor-default">Contact</span>
+      <Link to="/legal" className="hover:text-green-800 transition-colors">Legal</Link>
+      <Link to="/about" className="hover:text-green-800 transition-colors">About</Link>
+    </div>
+  </div>
+</footer>
     </div>
   );
 }
