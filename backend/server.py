@@ -14,36 +14,27 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, status, File, UploadFile, Header, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, File, UploadFile
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
-
+import asyncpg
 
 # --- Config ----------------------------------------------------------------
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+DATABASE_URL = os.environ["DATABASE_URL"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))
 AUTO_VERIFY_AFTER_TRIPS = int(os.environ.get("AUTO_VERIFY_AFTER_TRIPS", "3"))
-
-MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "").strip()
-MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "").strip()
-MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "").strip()
-MSG91_BASE_URL = "https://control.msg91.com/api/v5"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 OTP_MOCK_CODE = "123456"
 
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "").strip()
-STORAGE_APP_NAME = os.environ.get("STORAGE_APP_NAME", "lkk")
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-storage_key: Optional[str] = None  # set once at startup
-
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+PRICE_CHAT = 199
+PRICE_IN_PERSON_PER_DAY = 499
 
 app = FastAPI(title="LKK API")
 api = APIRouter(prefix="/api")
@@ -52,22 +43,24 @@ bearer = HTTPBearer(auto_error=False)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("lkk")
 
+# --- Database pool ---------------------------------------------------------
+db_pool: asyncpg.Pool = None
+
+async def get_db() -> asyncpg.Pool:
+    return db_pool
 
 # --- Helpers ---------------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
-
 
 def create_token(user_id: str, email: str, role: str) -> str:
     payload = {
@@ -79,22 +72,19 @@ def create_token(user_id: str, email: str, role: str) -> str:
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-
 def public_user(doc: dict) -> dict:
     return {
-        "id": doc["id"],
+        "id": str(doc["id"]),
         "email": doc["email"],
         "name": doc.get("name", ""),
         "role": doc["role"],
         "phone": doc.get("phone"),
         "city": doc.get("city"),
         "phone_verified": doc.get("phone_verified", False),
-        "created_at": doc.get("created_at"),
+        "created_at": str(doc.get("created_at", "")),
     }
 
-
 def normalize_phone(raw: str) -> str:
-    """Normalize an Indian phone number to '91XXXXXXXXXX' format expected by MSG91."""
     digits = re.sub(r"\D", "", raw or "")
     if digits.startswith("91") and len(digits) == 12:
         return digits
@@ -102,104 +92,48 @@ def normalize_phone(raw: str) -> str:
         return f"91{digits}"
     if digits.startswith("0") and len(digits) == 11:
         return f"91{digits[1:]}"
-    if digits.startswith("091") and len(digits) == 13:
-        return digits[1:]
     raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian phone number")
 
-
-# --- MSG91 OTP -------------------------------------------------------------
-def msg91_enabled() -> bool:
-    return bool(MSG91_AUTH_KEY and MSG91_TEMPLATE_ID)
-
-
-async def msg91_send_otp(mobile: str) -> dict:
-    if not msg91_enabled():
-        logger.info("[OTP MOCK] code for %s is %s", mobile, OTP_MOCK_CODE)
-        return {"type": "success", "mock": True, "message": "Mock OTP sent. Use 123456."}
-    params = {"template_id": MSG91_TEMPLATE_ID, "mobile": mobile}
-    if MSG91_SENDER_ID:
-        params["sender"] = MSG91_SENDER_ID
-    headers = {"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=20) as cli:
-        resp = await cli.post(f"{MSG91_BASE_URL}/otp", params=params, json={}, headers=headers)
-        data = resp.json() if resp.text else {}
-    if data.get("type") != "success":
-        # graceful fallback: switch to mock mode for this number so the flow stays usable
-        logger.warning("MSG91 send failed: %s — falling back to mock", data)
-        return {"type": "success", "mock": True, "message": "Mock OTP sent. Use 123456."}
-    return {"type": "success", "mock": False, **data}
-
-
-async def msg91_verify_otp(mobile: str, otp: str) -> bool:
-    if not msg91_enabled():
-        return otp == OTP_MOCK_CODE
-    params = {"mobile": mobile, "otp": otp}
-    headers = {"authkey": MSG91_AUTH_KEY}
-    async with httpx.AsyncClient(timeout=20) as cli:
-        resp = await cli.get(f"{MSG91_BASE_URL}/otp/verify", params=params, headers=headers)
-        data = resp.json() if resp.text else {}
-    if data.get("type") == "success":
-        return True
-    # graceful: if MSG91 returns an error AND otp == mock code, accept (dev mode)
-    if otp == OTP_MOCK_CODE:
-        logger.info("MSG91 verify failed but mock code matched — accepting")
-        return True
-    return False
-
-
-# --- Emergent Object Storage ----------------------------------------------
-async def init_storage() -> Optional[str]:
-    global storage_key
-    if storage_key:
-        return storage_key
-    if not EMERGENT_LLM_KEY:
+def row_to_dict(row) -> dict:
+    if row is None:
         return None
-    try:
-        async with httpx.AsyncClient(timeout=30) as cli:
-            resp = await cli.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY})
-        resp.raise_for_status()
-        storage_key = resp.json().get("storage_key")
-        return storage_key
-    except Exception as e:
-        logger.warning("Storage init failed: %s", e)
-        return None
+    return dict(row)
 
+def rows_to_list(rows) -> list:
+    return [dict(row) for row in rows]
 
-async def storage_put(path: str, data: bytes, content_type: str) -> dict:
-    key = await init_storage()
-    if not key:
-        raise HTTPException(status_code=503, detail="File storage not configured")
-    async with httpx.AsyncClient(timeout=120) as cli:
-        resp = await cli.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            content=data,
-        )
-    if resp.status_code == 403:
-        global storage_key
-        storage_key = None
-        raise HTTPException(status_code=503, detail="Storage auth expired, please retry")
-    resp.raise_for_status()
-    return resp.json()
-
-
-async def storage_get(path: str) -> tuple[bytes, str]:
-    key = await init_storage()
-    if not key:
-        raise HTTPException(status_code=404, detail="File not found")
+# --- Supabase Storage ------------------------------------------------------
+async def upload_to_supabase(path: str, data: bytes, content_type: str) -> str:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    bucket = "avatars"
+    url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": content_type,
+    }
     async with httpx.AsyncClient(timeout=60) as cli:
-        resp = await cli.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+        resp = await cli.post(url, headers=headers, content=data)
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=503, detail="Storage upload failed")
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}"
+    return public_url
+
+# --- Email via Resend ------------------------------------------------------
+async def send_email(to: str, subject: str, html: str):
+    if not RESEND_API_KEY:
+        logger.info("[EMAIL MOCK] To: %s | Subject: %s", to, subject)
+        return
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={"from": "LKK <hello@lkk.co.in>", "to": to, "subject": subject, "html": html},
+        )
     if resp.status_code != 200:
-        raise HTTPException(status_code=404, detail="File not found")
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+        logger.warning("Email send failed: %s", resp.text)
 
-
-MIME_BY_EXT = {
-    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-    "gif": "image/gif", "webp": "image/webp",
-}
-
-
+# --- Auth ------------------------------------------------------------------
 async def get_current_user(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
@@ -219,33 +153,20 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", payload["sub"])
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    return user
-
+    return row_to_dict(user)
 
 def require_role(*roles: str):
     async def dep(user: dict = Depends(get_current_user)) -> dict:
         if user["role"] not in roles:
             raise HTTPException(status_code=403, detail="Forbidden: insufficient role")
         return user
-
     return dep
 
-
 # --- Models ----------------------------------------------------------------
-Role = Literal["traveller", "local", "admin"]
-BookingStatus = Literal[
-    "pending_payment",
-    "paid",
-    "itinerary_delivered",
-    "completed",
-    "cancelled",
-    "disputed",
-]
-
-
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
@@ -254,20 +175,16 @@ class RegisterIn(BaseModel):
     phone: Optional[str] = None
     city: Optional[str] = None
 
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
 
-
 class OTPSendIn(BaseModel):
     phone: str
-
 
 class OTPVerifyIn(BaseModel):
     phone: str
     otp: str = Field(min_length=4, max_length=6)
-
 
 class GuideProfileIn(BaseModel):
     city: str
@@ -278,27 +195,6 @@ class GuideProfileIn(BaseModel):
     offers_in_person: bool = False
     avatar_url: Optional[str] = None
 
-
-class GuideProfileOut(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str
-    user_id: str
-    name: str
-    city: str
-    bio: str
-    languages: List[str]
-    specialities: List[str]
-    price: int
-    avatar_url: Optional[str] = None
-    rating: float = 0.0
-    review_count: int = 0
-    is_complete: bool = False
-
-
-PRICE_CHAT = 199
-PRICE_IN_PERSON_PER_DAY = 499
-
-
 class BookingIn(BaseModel):
     guide_id: str
     trip_start: str
@@ -308,77 +204,21 @@ class BookingIn(BaseModel):
     package_type: Literal["chat", "in_person"] = "chat"
     days: int = Field(default=1, ge=1, le=30)
 
-
 class ItineraryIn(BaseModel):
     title: str
     content: str
 
-
 class MessageIn(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
-
 
 class ReviewIn(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str = ""
 
-
 class DisputeIn(BaseModel):
     reason: str
 
-
 # --- Startup ---------------------------------------------------------------
-@app.on_event("startup")
-async def on_startup() -> None:
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("id", unique=True)
-    await db.guides.create_index("user_id", unique=True)
-    await db.guides.create_index("id", unique=True)
-    await db.bookings.create_index("id", unique=True)
-    await db.messages.create_index([("booking_id", 1), ("created_at", 1)])
-    await db.reviews.create_index("guide_id")
-    await db.files.create_index("storage_path")
-    await seed_admin()
-    await seed_demo_data()
-    # backfill verified flag for any guides that pre-date the field
-    await db.guides.update_many({"verified": {"$exists": False}}, {"$set": {"verified": False}})
-    # backfill tier flags for legacy guides — default: both tiers ON
-    await db.guides.update_many(
-        {"offers_chat": {"$exists": False}},
-        {"$set": {"offers_chat": True, "offers_in_person": True, "price": 199}},
-    )
-    # mark the 6 demo locals (lk seed) as verified for a polished demo UX
-    demo_emails = [d["email"] for d in DEMO_LOCALS]
-    demo_users = await db.users.find({"email": {"$in": demo_emails}}, {"id": 1, "_id": 0}).to_list(20)
-    demo_ids = [u["id"] for u in demo_users]
-    if demo_ids:
-        await db.guides.update_many({"user_id": {"$in": demo_ids}}, {"$set": {"verified": True}})
-    # try to initialise storage upfront (non-fatal if it fails)
-    await init_storage()
-
-
-async def seed_admin() -> None:
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@localink.in")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
-    existing = await db.users.find_one({"email": admin_email})
-    if existing is None:
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "email": admin_email,
-            "name": "Localink Admin",
-            "role": "admin",
-            "password_hash": hash_password(admin_password),
-            "created_at": now_iso(),
-        })
-        logger.info("Seeded admin: %s", admin_email)
-    elif not verify_password(admin_password, existing.get("password_hash", "")):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}},
-        )
-        logger.info("Updated admin password")
-
-
 DEMO_LOCALS = [
     {
         "email": "aarav.jaipur@localink.in",
@@ -387,7 +227,6 @@ DEMO_LOCALS = [
         "bio": "Born and raised in the pink city. I'll show you the hidden havelis, secret rooftop chai spots, and the best laal maas in town.",
         "languages": ["Hindi", "English", "Rajasthani"],
         "specialities": ["Heritage walks", "Local cuisine", "Bazaar shopping"],
-        "price": 899,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Aarav&backgroundColor=166534",
     },
     {
@@ -397,7 +236,6 @@ DEMO_LOCALS = [
         "bio": "Goan Catholic, beach-side café owner, and surfer. Skip the tourist traps — I'll take you to fishermen coves and the live music joints locals love.",
         "languages": ["English", "Konkani", "Hindi"],
         "specialities": ["Hidden beaches", "Live music", "Seafood"],
-        "price": 1299,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Meera&backgroundColor=166534",
     },
     {
@@ -407,7 +245,6 @@ DEMO_LOCALS = [
         "bio": "Mountain guide for 12 years. Day hikes, monastery visits, and the warmest Tibetan thukpa you'll ever taste.",
         "languages": ["Hindi", "English", "Tibetan"],
         "specialities": ["Day treks", "Monasteries", "Mountain cafés"],
-        "price": 1499,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Tenzin&backgroundColor=166534",
     },
     {
@@ -417,7 +254,6 @@ DEMO_LOCALS = [
         "bio": "Sanskrit scholar and ghat-side storyteller. Sunrise boat rides, evening aarti, and the philosophy of the old city.",
         "languages": ["Hindi", "English", "Sanskrit"],
         "specialities": ["Ghats & aarti", "Heritage", "Spiritual walks"],
-        "price": 699,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Kavya&backgroundColor=166534",
     },
     {
@@ -427,7 +263,6 @@ DEMO_LOCALS = [
         "bio": "Tech worker by day, craft beer & filter coffee guide by weekend. I'll show you the city beyond the malls.",
         "languages": ["English", "Kannada", "Tamil"],
         "specialities": ["Café crawls", "Craft breweries", "Indie music"],
-        "price": 999,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Rohan&backgroundColor=166534",
     },
     {
@@ -437,104 +272,141 @@ DEMO_LOCALS = [
         "bio": "I run a small art school overlooking Lake Pichola. Miniature painting workshops, palace tours, and quiet boat rides at golden hour.",
         "languages": ["Hindi", "English"],
         "specialities": ["Art workshops", "Palace tours", "Lake walks"],
-        "price": 1199,
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Priya&backgroundColor=166534",
     },
 ]
 
+@app.on_event("startup")
+async def on_startup() -> None:
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    logger.info("Database pool created")
+    await seed_admin()
+    await seed_demo_data()
+
+async def seed_admin() -> None:
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@localink.in")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1", admin_email)
+        if existing is None:
+            await conn.execute(
+                """INSERT INTO users (id, email, name, role, password_hash, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                str(uuid.uuid4()), admin_email, "Localink Admin", "admin",
+                hash_password(admin_password), datetime.now(timezone.utc)
+            )
+            logger.info("Seeded admin: %s", admin_email)
 
 async def seed_demo_data() -> None:
-    if await db.guides.count_documents({}) > 0:
-        return
-    for d in DEMO_LOCALS:
-        user_id = str(uuid.uuid4())
-        guide_id = str(uuid.uuid4())
-        await db.users.insert_one({
-            "id": user_id,
-            "email": d["email"],
-            "name": d["name"],
-            "role": "local",
-            "password_hash": hash_password("Local@123"),
-            "phone_verified": True,
-            "created_at": now_iso(),
-        })
-        await db.guides.insert_one({
-            "id": guide_id,
-            "user_id": user_id,
-            "name": d["name"],
-            "city": d["city"],
-            "bio": d["bio"],
-            "languages": d["languages"],
-            "specialities": d["specialities"],
-            "price": 199,
-            "offers_chat": True,
-            "offers_in_person": True,
-            "avatar_url": d["avatar_url"],
-            "rating": 4.7,
-            "review_count": 0,
-            "is_complete": True,
-            "verified": True,
-            "created_at": now_iso(),
-        })
-    logger.info("Seeded %d demo guides", len(DEMO_LOCALS))
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM guides")
+        if count > 0:
+            return
+        for d in DEMO_LOCALS:
+            user_id = str(uuid.uuid4())
+            guide_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO users (id, email, name, role, password_hash, phone_verified, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                user_id, d["email"], d["name"], "local",
+                hash_password("Local@123"), True, datetime.now(timezone.utc)
+            )
+            await conn.execute(
+                """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
+                   price, offers_chat, offers_in_person, avatar_url, rating, review_count,
+                   is_complete, verified, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)""",
+                guide_id, user_id, d["name"], d["city"], d["bio"],
+                d["languages"], d["specialities"],
+                199, True, True, d["avatar_url"],
+                4.7, 0, True, True, datetime.now(timezone.utc)
+            )
+        logger.info("Seeded %d demo guides", len(DEMO_LOCALS))
 
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await db_pool.close()
 
 # --- Auth endpoints --------------------------------------------------------
 @api.post("/auth/register")
 async def register(body: RegisterIn):
     email = body.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user_id = str(uuid.uuid4())
-    phone = normalize_phone(body.phone) if body.phone else None
-    doc = {
-        "id": user_id,
-        "email": email,
-        "name": body.name.strip(),
-        "role": body.role,
-        "password_hash": hash_password(body.password),
-        "phone": phone,
-        "city": (body.city or "").strip() or None,
-        "phone_verified": False,
-        "created_at": now_iso(),
-    }
-    await db.users.insert_one(doc)
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        user_id = str(uuid.uuid4())
+        phone = normalize_phone(body.phone) if body.phone else None
+        await conn.execute(
+            """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+            user_id, email, body.name.strip(), body.role,
+            hash_password(body.password), phone,
+            (body.city or "").strip() or None, False, datetime.now(timezone.utc)
+        )
+        user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
     token = create_token(user_id, email, body.role)
-    return {"token": token, "user": public_user(doc)}
+    # Send welcome email
+    await send_email(
+        email,
+        "Welcome to LKK 🌿",
+        f"<h2>Welcome to LKK, {body.name}!</h2><p>Travel like a local. We're glad you're here.</p>"
+    )
+    return {"token": token, "user": public_user(row_to_dict(user))}
 
+@api.post("/auth/login")
+async def login(body: LoginIn):
+    email = body.email.lower()
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    user_dict = row_to_dict(user)
+    token = create_token(str(user["id"]), user["email"], user["role"])
+    return {"token": token, "user": public_user(user_dict)}
 
-# --- OTP -------------------------------------------------------------------
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return {"user": public_user(user)}
+
+# --- OTP (mock for now) ----------------------------------------------------
 @api.post("/otp/send")
 async def otp_send(body: OTPSendIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
-    # remember the phone we're verifying against on the user record
-    await db.users.update_one({"id": user["id"]}, {"$set": {"phone": phone, "phone_verified": False}})
-    result = await msg91_send_otp(phone)
-    return {"ok": True, "phone": phone, "mock": result.get("mock", False)}
-
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET phone = $1, phone_verified = FALSE WHERE id = $2",
+            phone, str(user["id"])
+        )
+    logger.info("[OTP MOCK] code for %s is %s", phone, OTP_MOCK_CODE)
+    return {"ok": True, "phone": phone, "mock": True, "message": "Mock OTP sent. Use 123456."}
 
 @api.post("/otp/verify")
 async def otp_verify(body: OTPVerifyIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
-    ok = await msg91_verify_otp(phone, body.otp.strip())
-    if not ok:
+    if body.otp.strip() != OTP_MOCK_CODE:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    await db.users.update_one(
-        {"id": user["id"]},
-        {"$set": {"phone": phone, "phone_verified": True, "phone_verified_at": now_iso()}},
-    )
-    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
-    return {"ok": True, "user": public_user(fresh)}
-
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET phone = $1, phone_verified = TRUE, phone_verified_at = $2 WHERE id = $3",
+            phone, datetime.now(timezone.utc), str(user["id"])
+        )
+        fresh = await conn.fetchrow("SELECT * FROM users WHERE id = $1", str(user["id"]))
+    return {"ok": True, "user": public_user(row_to_dict(fresh))}
 
 @api.post("/otp/resend")
 async def otp_resend(body: OTPSendIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
-    result = await msg91_send_otp(phone)
-    return {"ok": True, "mock": result.get("mock", False)}
+    logger.info("[OTP MOCK] resend code for %s is %s", phone, OTP_MOCK_CODE)
+    return {"ok": True, "mock": True}
 
+# --- File upload -----------------------------------------------------------
+MIME_BY_EXT = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "gif": "image/gif", "webp": "image/webp",
+}
 
-# --- File upload + serve --------------------------------------------------
 @api.post("/upload")
 async def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
@@ -544,45 +416,16 @@ async def upload(file: UploadFile = File(...), user: dict = Depends(get_current_
     data = await file.read()
     if len(data) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
-    path = f"{STORAGE_APP_NAME}/avatars/{user['id']}/{uuid.uuid4().hex}.{ext}"
-    result = await storage_put(path, data, content_type)
-    canonical = result.get("path") or path
-    await db.files.insert_one({
-        "id": str(uuid.uuid4()),
-        "owner_id": user["id"],
-        "storage_path": canonical,
-        "original_filename": file.filename,
-        "content_type": content_type,
-        "size": result.get("size", len(data)),
-        "is_deleted": False,
-        "created_at": now_iso(),
-    })
-    return {"path": canonical, "url": f"/api/files/{canonical}"}
-
-
-@api.get("/files/{path:path}")
-async def files_get(path: str):
-    record = await db.files.find_one({"storage_path": path, "is_deleted": False})
-    if not record:
-        raise HTTPException(status_code=404, detail="File not found")
-    data, ct = await storage_get(path)
-    return Response(content=data, media_type=record.get("content_type") or ct)
-
-
-@api.post("/auth/login")
-async def login(body: LoginIn):
-    email = body.email.lower()
-    user = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user or not verify_password(body.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_token(user["id"], user["email"], user["role"])
-    return {"token": token, "user": public_user(user)}
-
-
-@api.get("/auth/me")
-async def me(user: dict = Depends(get_current_user)):
-    return {"user": public_user(user)}
-
+    path = f"avatars/{user['id']}/{uuid.uuid4().hex}.{ext}"
+    public_url = await upload_to_supabase(path, data, content_type)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO files (id, owner_id, storage_path, original_filename, content_type, size, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            str(uuid.uuid4()), str(user["id"]), path,
+            file.filename, content_type, len(data), datetime.now(timezone.utc)
+        )
+    return {"path": path, "url": public_url}
 
 # --- Guide profile ---------------------------------------------------------
 @api.get("/guides")
@@ -593,326 +436,381 @@ async def list_guides(
     min_rating: Optional[float] = None,
     sort: Optional[str] = "rating",
 ):
-    query: dict = {"is_complete": True}
+    query = "SELECT * FROM guides WHERE is_complete = TRUE"
+    params = []
+    i = 1
     if city:
-        query["city"] = {"$regex": f"^{city}$", "$options": "i"}
-    if min_price is not None or max_price is not None:
-        price_q: dict = {}
-        if min_price is not None:
-            price_q["$gte"] = min_price
-        if max_price is not None:
-            price_q["$lte"] = max_price
-        query["price"] = price_q
+        query += f" AND LOWER(city) = LOWER(${i})"
+        params.append(city)
+        i += 1
+    if min_price is not None:
+        query += f" AND price >= ${i}"
+        params.append(min_price)
+        i += 1
+    if max_price is not None:
+        query += f" AND price <= ${i}"
+        params.append(max_price)
+        i += 1
     if min_rating is not None:
-        query["rating"] = {"$gte": min_rating}
-    sort_field = {"rating": ("rating", -1), "price_low": ("price", 1), "price_high": ("price", -1)}.get(
-        sort or "rating", ("rating", -1)
-    )
-    cursor = db.guides.find(query, {"_id": 0}).sort([sort_field])
-    return await cursor.to_list(200)
-
+        query += f" AND rating >= ${i}"
+        params.append(min_rating)
+        i += 1
+    sort_map = {
+        "rating": "rating DESC",
+        "price_low": "price ASC",
+        "price_high": "price DESC",
+    }
+    query += f" ORDER BY {sort_map.get(sort or 'rating', 'rating DESC')}"
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+    result = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["id"] = str(d["id"])
+        d["user_id"] = str(d["user_id"])
+        result.append(d)
+    return result
 
 @api.get("/guides/cities")
 async def list_cities():
-    cities = await db.guides.distinct("city", {"is_complete": True})
-    return sorted(cities)
-
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT DISTINCT city FROM guides WHERE is_complete = TRUE ORDER BY city")
+    return [row["city"] for row in rows]
 
 @api.get("/guides/{guide_id}")
 async def get_guide(guide_id: str):
-    guide = await db.guides.find_one({"id": guide_id}, {"_id": 0})
-    if not guide:
-        raise HTTPException(status_code=404, detail="Guide not found")
-    reviews = await db.reviews.find({"guide_id": guide_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
-    return {"guide": guide, "reviews": reviews}
-
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
+        if not guide:
+            raise HTTPException(status_code=404, detail="Guide not found")
+        reviews = await conn.fetch(
+            "SELECT * FROM reviews WHERE guide_id = $1 ORDER BY created_at DESC LIMIT 50",
+            guide_id
+        )
+    guide_dict = row_to_dict(guide)
+    guide_dict["id"] = str(guide_dict["id"])
+    guide_dict["user_id"] = str(guide_dict["user_id"])
+    return {"guide": guide_dict, "reviews": rows_to_list(reviews)}
 
 @api.get("/profile/guide/me")
 async def my_guide_profile(user: dict = Depends(require_role("local"))):
-    guide = await db.guides.find_one({"user_id": user["id"]}, {"_id": 0})
-    return {"guide": guide}
-
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+    if guide:
+        d = row_to_dict(guide)
+        d["id"] = str(d["id"])
+        d["user_id"] = str(d["user_id"])
+        return {"guide": d}
+    return {"guide": None}
 
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
     if not body.offers_chat and not body.offers_in_person:
         raise HTTPException(status_code=400, detail="Turn on at least one package tier")
-    existing = await db.guides.find_one({"user_id": user["id"]})
-    data = body.model_dump()
-    # store the cheapest active tier as `price` for sorting / "starting at" labels
-    data["price"] = PRICE_CHAT if data["offers_chat"] else PRICE_IN_PERSON_PER_DAY
-    data["is_complete"] = bool(data["city"] and data["bio"] and (data["offers_chat"] or data["offers_in_person"]))
-    if existing:
-        await db.guides.update_one({"user_id": user["id"]}, {"$set": data})
-        guide = await db.guides.find_one({"user_id": user["id"]}, {"_id": 0})
-    else:
-        guide_id = str(uuid.uuid4())
-        guide = {
-            "id": guide_id,
-            "user_id": user["id"],
-            "name": user["name"],
-            **data,
-            "rating": 0.0,
-            "review_count": 0,
-            "verified": False,
-            "created_at": now_iso(),
-        }
-        await db.guides.insert_one(guide)
-        guide.pop("_id", None)
-    return {"guide": guide}
-
+    price = PRICE_CHAT if body.offers_chat else PRICE_IN_PERSON_PER_DAY
+    is_complete = bool(body.city and body.bio and (body.offers_chat or body.offers_in_person))
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
+        if existing:
+            await conn.execute(
+                """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
+                   offers_chat=$5, offers_in_person=$6, avatar_url=$7, price=$8, is_complete=$9
+                   WHERE user_id=$10""",
+                body.city, body.bio, body.languages, body.specialities,
+                body.offers_chat, body.offers_in_person, body.avatar_url,
+                price, is_complete, str(user["id"])
+            )
+        else:
+            guide_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
+                   price, offers_chat, offers_in_person, avatar_url, rating, review_count,
+                   is_complete, verified, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)""",
+                guide_id, str(user["id"]), user["name"], body.city, body.bio,
+                body.languages, body.specialities, price,
+                body.offers_chat, body.offers_in_person, body.avatar_url,
+                0.0, 0, is_complete, False, datetime.now(timezone.utc)
+            )
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+    d = row_to_dict(guide)
+    d["id"] = str(d["id"])
+    d["user_id"] = str(d["user_id"])
+    return {"guide": d}
 
 # --- Bookings --------------------------------------------------------------
 @api.post("/bookings")
 async def create_booking(body: BookingIn, user: dict = Depends(require_role("traveller"))):
-    guide = await db.guides.find_one({"id": body.guide_id}, {"_id": 0})
-    if not guide:
-        raise HTTPException(status_code=404, detail="Guide not found")
-    # Validate the guide actually offers this tier
-    if body.package_type == "chat":
-        if guide.get("offers_chat", True) is False:
-            raise HTTPException(status_code=400, detail="This guide does not offer chat-only")
-        amount = PRICE_CHAT
-        days = 1
-    else:
-        if guide.get("offers_in_person", False) is False:
-            raise HTTPException(status_code=400, detail="This guide does not offer in-person")
-        days = max(1, int(body.days))
-        amount = PRICE_IN_PERSON_PER_DAY * days
-    platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100)
-    local_payout = amount - platform_fee
-    booking = {
-        "id": str(uuid.uuid4()),
-        "guide_id": guide["id"],
-        "guide_name": guide["name"],
-        "guide_city": guide["city"],
-        "local_user_id": guide["user_id"],
-        "traveller_user_id": user["id"],
-        "traveller_name": user["name"],
-        "traveller_phone": body.traveller_phone,
-        "trip_start": body.trip_start,
-        "trip_end": body.trip_end,
-        "notes": body.notes or "",
-        "package_type": body.package_type,
-        "days": days,
-        "amount": amount,
-        "platform_fee": platform_fee,
-        "local_payout": local_payout,
-        "status": "pending_payment",
-        "itinerary": None,
-        "payment_released": False,
-        "created_at": now_iso(),
-    }
-    await db.bookings.insert_one(booking)
-    booking.pop("_id", None)
-    return booking
-
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", body.guide_id)
+        if not guide:
+            raise HTTPException(status_code=404, detail="Guide not found")
+        if body.package_type == "chat":
+            if not guide["offers_chat"]:
+                raise HTTPException(status_code=400, detail="This guide does not offer chat-only")
+            amount = PRICE_CHAT
+            days = 1
+        else:
+            if not guide["offers_in_person"]:
+                raise HTTPException(status_code=400, detail="This guide does not offer in-person")
+            days = max(1, int(body.days))
+            amount = PRICE_IN_PERSON_PER_DAY * days
+        platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100)
+        local_payout = amount - platform_fee
+        booking_id = str(uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO bookings (id, guide_id, guide_name, guide_city, local_user_id,
+               traveller_user_id, traveller_name, traveller_phone, trip_start, trip_end,
+               notes, package_type, days, amount, platform_fee, local_payout, status, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+            booking_id, str(guide["id"]), guide["name"], guide["city"], str(guide["user_id"]),
+            str(user["id"]), user["name"], body.traveller_phone,
+            body.trip_start, body.trip_end, body.notes or "",
+            body.package_type, days, amount, platform_fee, local_payout,
+            "pending_payment", datetime.now(timezone.utc)
+        )
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+    # Send confirmation email
+    await send_email(
+        user["email"],
+        "Booking Confirmed — LKK 🌿",
+        f"<h2>Your booking is confirmed!</h2><p>You've booked {guide['name']} in {guide['city']}. Amount: ₹{amount}</p>"
+    )
+    d = row_to_dict(booking)
+    d["id"] = str(d["id"])
+    return d
 
 @api.post("/bookings/{booking_id}/pay")
 async def mock_pay(booking_id: str, user: dict = Depends(require_role("traveller"))):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking or booking["traveller_user_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    if booking["status"] != "pending_payment":
-        raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
-    mock_payment_id = f"pay_mock_{uuid.uuid4().hex[:16]}"
-    await db.bookings.update_one(
-        {"id": booking_id},
-        {"$set": {"status": "paid", "payment_id": mock_payment_id, "paid_at": now_iso()}},
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] != "pending_payment":
+            raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
+        mock_payment_id = f"pay_mock_{uuid.uuid4().hex[:16]}"
+        await conn.execute(
+            "UPDATE bookings SET status='paid', payment_id=$1, paid_at=$2 WHERE id=$3",
+            mock_payment_id, datetime.now(timezone.utc), booking_id
+        )
+    await send_email(
+        user["email"],
+        "Payment Received — LKK 🌿",
+        f"<h2>Payment confirmed!</h2><p>Amount: ₹{booking['amount']}. Your local will send your itinerary soon.</p>"
     )
     return {"ok": True, "payment_id": mock_payment_id, "status": "paid"}
 
-
 @api.get("/bookings/mine")
 async def my_bookings(user: dict = Depends(get_current_user)):
-    key = "traveller_user_id" if user["role"] == "traveller" else "local_user_id"
-    if user["role"] == "admin":
-        cursor = db.bookings.find({}, {"_id": 0}).sort("created_at", -1)
-    else:
-        cursor = db.bookings.find({key: user["id"]}, {"_id": 0}).sort("created_at", -1)
-    return await cursor.to_list(500)
-
+    async with db_pool.acquire() as conn:
+        if user["role"] == "admin":
+            rows = await conn.fetch("SELECT * FROM bookings ORDER BY created_at DESC LIMIT 500")
+        elif user["role"] == "traveller":
+            rows = await conn.fetch(
+                "SELECT * FROM bookings WHERE traveller_user_id = $1 ORDER BY created_at DESC",
+                str(user["id"])
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM bookings WHERE local_user_id = $1 ORDER BY created_at DESC",
+                str(user["id"])
+            )
+    result = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["id"] = str(d["id"])
+        result.append(d)
+    return result
 
 @api.get("/bookings/{booking_id}")
 async def get_booking(booking_id: str, user: dict = Depends(get_current_user)):
-    booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    if user["role"] != "admin" and user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
+    if user["role"] != "admin" and str(user["id"]) not in (
+        str(booking["traveller_user_id"]), str(booking["local_user_id"])
+    ):
         raise HTTPException(status_code=403, detail="Not your booking")
-    return booking
-
+    d = row_to_dict(booking)
+    d["id"] = str(d["id"])
+    return d
 
 @api.post("/bookings/{booking_id}/itinerary")
 async def deliver_itinerary(booking_id: str, body: ItineraryIn, user: dict = Depends(require_role("local"))):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking or booking["local_user_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    if booking["status"] not in ("paid", "itinerary_delivered"):
-        raise HTTPException(status_code=400, detail="Booking must be paid before delivering itinerary")
-    await db.bookings.update_one(
-        {"id": booking_id},
-        {"$set": {
-            "itinerary": {"title": body.title, "content": body.content, "delivered_at": now_iso()},
-            "status": "itinerary_delivered",
-        }},
-    )
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["local_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] not in ("paid", "itinerary_delivered"):
+            raise HTTPException(status_code=400, detail="Booking must be paid before delivering itinerary")
+        import json
+        itinerary_json = json.dumps({"title": body.title, "content": body.content, "delivered_at": now_iso()})
+        await conn.execute(
+            "UPDATE bookings SET itinerary=$1::jsonb, status='itinerary_delivered' WHERE id=$2",
+            itinerary_json, booking_id
+        )
+        traveller = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(booking["traveller_user_id"]))
+    if traveller:
+        await send_email(
+            traveller["email"],
+            "Your Itinerary is Ready — LKK 🌿",
+            f"<h2>Your local sent your itinerary!</h2><p>{body.title}</p><p>Log in to view and confirm it.</p>"
+        )
     return {"ok": True}
-
 
 @api.post("/bookings/{booking_id}/confirm")
 async def confirm_itinerary(booking_id: str, user: dict = Depends(require_role("traveller"))):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking or booking["traveller_user_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    if booking["status"] != "itinerary_delivered":
-        raise HTTPException(status_code=400, detail="No itinerary to confirm yet")
-    await db.bookings.update_one(
-        {"id": booking_id},
-        {"$set": {"status": "completed", "payment_released": True, "completed_at": now_iso()}},
-    )
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] != "itinerary_delivered":
+            raise HTTPException(status_code=400, detail="No itinerary to confirm yet")
+        await conn.execute(
+            "UPDATE bookings SET status='completed', payment_released=TRUE, completed_at=$1 WHERE id=$2",
+            datetime.now(timezone.utc), booking_id
+        )
     return {"ok": True, "payout_released": booking["local_payout"]}
-
 
 @api.post("/bookings/{booking_id}/dispute")
 async def raise_dispute(booking_id: str, body: DisputeIn, user: dict = Depends(get_current_user)):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking or user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
-        raise HTTPException(status_code=404, detail="Booking not found")
-    await db.bookings.update_one(
-        {"id": booking_id},
-        {"$set": {"status": "disputed", "dispute_reason": body.reason, "disputed_at": now_iso(), "disputed_by": user["id"]}},
-    )
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(user["id"]) not in (
+            str(booking["traveller_user_id"]), str(booking["local_user_id"])
+        ):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        await conn.execute(
+            "UPDATE bookings SET status='disputed', dispute_reason=$1, disputed_at=$2, disputed_by=$3 WHERE id=$4",
+            body.reason, datetime.now(timezone.utc), str(user["id"]), booking_id
+        )
     return {"ok": True}
 
-
-# --- Messages (polling chat) -----------------------------------------------
-async def _ensure_booking_party(booking_id: str, user: dict) -> dict:
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    if user["role"] != "admin" and user["id"] not in (booking["traveller_user_id"], booking["local_user_id"]):
-        raise HTTPException(status_code=403, detail="Not your booking")
-    return booking
-
-
+# --- Messages --------------------------------------------------------------
 @api.get("/bookings/{booking_id}/messages")
 async def get_messages(booking_id: str, user: dict = Depends(get_current_user)):
-    await _ensure_booking_party(booking_id, user)
-    msgs = await db.messages.find({"booking_id": booking_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
-    return msgs
-
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if user["role"] != "admin" and str(user["id"]) not in (
+            str(booking["traveller_user_id"]), str(booking["local_user_id"])
+        ):
+            raise HTTPException(status_code=403, detail="Not your booking")
+        msgs = await conn.fetch(
+            "SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC",
+            booking_id
+        )
+    return rows_to_list(msgs)
 
 @api.post("/bookings/{booking_id}/messages")
 async def post_message(booking_id: str, body: MessageIn, user: dict = Depends(get_current_user)):
-    await _ensure_booking_party(booking_id, user)
-    msg = {
-        "id": str(uuid.uuid4()),
-        "booking_id": booking_id,
-        "sender_id": user["id"],
-        "sender_name": user["name"],
-        "sender_role": user["role"],
-        "content": body.content.strip(),
-        "created_at": now_iso(),
-    }
-    await db.messages.insert_one(msg)
-    msg.pop("_id", None)
-    return msg
-
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if user["role"] != "admin" and str(user["id"]) not in (
+            str(booking["traveller_user_id"]), str(booking["local_user_id"])
+        ):
+            raise HTTPException(status_code=403, detail="Not your booking")
+        msg_id = str(uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO messages (id, booking_id, sender_id, sender_name, sender_role, content, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            msg_id, booking_id, str(user["id"]), user["name"], user["role"],
+            body.content.strip(), datetime.now(timezone.utc)
+        )
+        msg = await conn.fetchrow("SELECT * FROM messages WHERE id = $1", msg_id)
+    return row_to_dict(msg)
 
 # --- Reviews ---------------------------------------------------------------
 @api.post("/bookings/{booking_id}/review")
 async def post_review(booking_id: str, body: ReviewIn, user: dict = Depends(require_role("traveller"))):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking or booking["traveller_user_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    if booking["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Only completed bookings can be reviewed")
-    if await db.reviews.find_one({"booking_id": booking_id}):
-        raise HTTPException(status_code=400, detail="Review already submitted")
-    review = {
-        "id": str(uuid.uuid4()),
-        "booking_id": booking_id,
-        "guide_id": booking["guide_id"],
-        "traveller_id": user["id"],
-        "traveller_name": user["name"],
-        "rating": body.rating,
-        "comment": body.comment,
-        "created_at": now_iso(),
-    }
-    await db.reviews.insert_one(review)
-    # recompute guide rating
-    agg = await db.reviews.aggregate([
-        {"$match": {"guide_id": booking["guide_id"]}},
-        {"$group": {"_id": "$guide_id", "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
-    ]).to_list(1)
-    if agg:
-        await db.guides.update_one(
-            {"id": booking["guide_id"]},
-            {"$set": {"rating": round(agg[0]["avg"], 2), "review_count": agg[0]["count"]}},
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] != "completed":
+            raise HTTPException(status_code=400, detail="Only completed bookings can be reviewed")
+        existing = await conn.fetchrow("SELECT id FROM reviews WHERE booking_id = $1", booking_id)
+        if existing:
+            raise HTTPException(status_code=400, detail="Review already submitted")
+        review_id = str(uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO reviews (id, booking_id, guide_id, traveller_id, traveller_name, rating, comment, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+            review_id, booking_id, str(booking["guide_id"]),
+            str(user["id"]), user["name"], body.rating, body.comment,
+            datetime.now(timezone.utc)
         )
-    review.pop("_id", None)
-    return review
-
+        avg = await conn.fetchrow(
+            "SELECT AVG(rating) as avg, COUNT(*) as count FROM reviews WHERE guide_id = $1",
+            str(booking["guide_id"])
+        )
+        await conn.execute(
+            "UPDATE guides SET rating=$1, review_count=$2 WHERE id=$3",
+            round(float(avg["avg"]), 2), avg["count"], str(booking["guide_id"])
+        )
+        review = await conn.fetchrow("SELECT * FROM reviews WHERE id = $1", review_id)
+    return row_to_dict(review)
 
 # --- Admin -----------------------------------------------------------------
 @api.get("/admin/users")
 async def admin_users(user: dict = Depends(require_role("admin"))):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
-    return users
-
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id,email,name,role,phone,city,phone_verified,created_at FROM users ORDER BY created_at DESC LIMIT 500")
+    return rows_to_list(rows)
 
 @api.get("/admin/bookings")
 async def admin_bookings(user: dict = Depends(require_role("admin"))):
-    bookings = await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return bookings
-
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM bookings ORDER BY created_at DESC LIMIT 500")
+    return rows_to_list(rows)
 
 @api.get("/admin/disputes")
 async def admin_disputes(user: dict = Depends(require_role("admin"))):
-    disputes = await db.bookings.find({"status": "disputed"}, {"_id": 0}).sort("disputed_at", -1).to_list(500)
-    return disputes
-
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM bookings WHERE status='disputed' ORDER BY disputed_at DESC")
+    return rows_to_list(rows)
 
 @api.post("/admin/disputes/{booking_id}/resolve")
 async def admin_resolve(booking_id: str, refund_to_traveller: bool = False, user: dict = Depends(require_role("admin"))):
-    booking = await db.bookings.find_one({"id": booking_id})
-    if not booking:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    new_status = "cancelled" if refund_to_traveller else "completed"
-    payment_released = not refund_to_traveller
-    await db.bookings.update_one(
-        {"id": booking_id},
-        {"$set": {"status": new_status, "payment_released": payment_released, "resolved_at": now_iso()}},
-    )
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        new_status = "cancelled" if refund_to_traveller else "completed"
+        payment_released = not refund_to_traveller
+        await conn.execute(
+            "UPDATE bookings SET status=$1, payment_released=$2, resolved_at=$3 WHERE id=$4",
+            new_status, payment_released, datetime.now(timezone.utc), booking_id
+        )
     return {"ok": True, "status": new_status}
-
 
 @api.post("/admin/guides/{guide_id}/verify")
 async def admin_verify_guide(guide_id: str, verified: bool = True, user: dict = Depends(require_role("admin"))):
-    res = await db.guides.update_one(
-        {"id": guide_id},
-        {"$set": {"verified": verified, "verified_at": now_iso(), "verified_by": "admin"}},
-    )
-    if res.matched_count == 0:
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE guides SET verified=$1, verified_at=$2, verified_by='admin' WHERE id=$3",
+            verified, datetime.now(timezone.utc), guide_id
+        )
+    if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="Guide not found")
     return {"ok": True, "verified": verified}
 
-
 @api.get("/admin/stats")
 async def admin_stats(user: dict = Depends(require_role("admin"))):
-    total_users = await db.users.count_documents({})
-    total_locals = await db.users.count_documents({"role": "local"})
-    total_travellers = await db.users.count_documents({"role": "traveller"})
-    total_bookings = await db.bookings.count_documents({})
-    completed = await db.bookings.count_documents({"status": "completed"})
-    disputed = await db.bookings.count_documents({"status": "disputed"})
-    agg = await db.bookings.aggregate([
-        {"$match": {"status": "completed"}},
-        {"$group": {"_id": None, "revenue": {"$sum": "$platform_fee"}, "gmv": {"$sum": "$amount"}}},
-    ]).to_list(1)
-    revenue = agg[0]["revenue"] if agg else 0
-    gmv = agg[0]["gmv"] if agg else 0
+    async with db_pool.acquire() as conn:
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+        total_locals = await conn.fetchval("SELECT COUNT(*) FROM users WHERE role='local'")
+        total_travellers = await conn.fetchval("SELECT COUNT(*) FROM users WHERE role='traveller'")
+        total_bookings = await conn.fetchval("SELECT COUNT(*) FROM bookings")
+        completed = await conn.fetchval("SELECT COUNT(*) FROM bookings WHERE status='completed'")
+        disputed = await conn.fetchval("SELECT COUNT(*) FROM bookings WHERE status='disputed'")
+        agg = await conn.fetchrow(
+            "SELECT SUM(platform_fee) as revenue, SUM(amount) as gmv FROM bookings WHERE status='completed'"
+        )
     return {
         "total_users": total_users,
         "total_locals": total_locals,
@@ -920,16 +818,14 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
         "total_bookings": total_bookings,
         "completed_bookings": completed,
         "disputed_bookings": disputed,
-        "platform_revenue": revenue,
-        "gmv": gmv,
+        "platform_revenue": agg["revenue"] or 0,
+        "gmv": agg["gmv"] or 0,
     }
-
 
 # --- Health ----------------------------------------------------------------
 @api.get("/")
 async def root():
     return {"ok": True, "service": "lkk"}
-
 
 app.include_router(api)
 
@@ -940,8 +836,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    client.close()
