@@ -279,11 +279,11 @@ DEMO_LOCALS = [
 @app.on_event("startup")
 async def on_startup() -> None:
     global db_pool
-   db_pool = await asyncpg.create_pool(
-      DATABASE_URL, 
-      min_size=1, 
-      max_size=10,
-      ssl='require'
+    db_pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=10,
+        ssl="require"
     )
     logger.info("Database pool created")
     await seed_admin()
