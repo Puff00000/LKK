@@ -647,8 +647,8 @@ async def deliver_itinerary(booking_id: str, body: ItineraryIn, user: dict = Dep
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["local_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] not in ("paid", "itinerary_delivered"):
-            raise HTTPException(status_code=400, detail="Booking must be paid before delivering itinerary")
+        if booking["status"] not in ("accepted", "itinerary_delivered"):
+            raise HTTPException(status_code=400, detail="Booking must be accepted before delivering itinerary")
         import json
         itinerary_json = json.dumps({"title": body.title, "content": body.content, "delivered_at": now_iso()})
         await conn.execute(
@@ -827,6 +827,57 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
         "gmv": agg["gmv"] or 0,
     }
 
+
+# --- Accept / Decline booking (local) ------------------------------------
+@api.post("/bookings/{booking_id}/accept")
+async def accept_booking(booking_id: str, user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["local_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] != "paid":
+            raise HTTPException(status_code=400, detail="Only paid bookings can be accepted")
+        await conn.execute(
+            "UPDATE bookings SET status='accepted' WHERE id=$1",
+            booking_id
+        )
+        traveller = await conn.fetchrow(
+            "SELECT email, name FROM users WHERE id = $1",
+            str(booking["traveller_user_id"])
+        )
+    if traveller:
+        await send_email(
+            traveller["email"],
+            "Your booking was accepted — LKK 🌿",
+            f"<h2>Great news!</h2><p>{user['name']} accepted your booking. They will send your itinerary soon!</p>"
+        )
+    return {"ok": True, "status": "accepted"}
+
+
+@api.post("/bookings/{booking_id}/decline")
+async def decline_booking(booking_id: str, user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["local_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] not in ("paid", "accepted"):
+            raise HTTPException(status_code=400, detail="This booking cannot be declined")
+        await conn.execute(
+            "UPDATE bookings SET status='cancelled' WHERE id=$1",
+            booking_id
+        )
+        traveller = await conn.fetchrow(
+            "SELECT email, name FROM users WHERE id = $1",
+            str(booking["traveller_user_id"])
+        )
+    if traveller:
+        await send_email(
+            traveller["email"],
+            "Booking update — LKK 🌿",
+            f"<h2>We're sorry!</h2><p>{user['name']} is unavailable for your requested dates. Your refund will be processed shortly.</p>"
+        )
+    return {"ok": True, "status": "cancelled"}
+
 # --- Health ----------------------------------------------------------------
 @api.get("/")
 async def root():
@@ -841,3 +892,5 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Note: Insert these two routes BEFORE the app.include_router(api) line
