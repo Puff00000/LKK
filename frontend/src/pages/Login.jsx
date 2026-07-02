@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate, useLocation } from "react-router-dom";
+import { Link, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const roleParam = searchParams.get("role");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -34,6 +36,16 @@ export default function Login() {
   return (
     <div className="mx-auto grid min-h-[80vh] max-w-md place-items-center px-4 py-12" data-testid="login-page">
       <div className="w-full">
+        {roleParam && (
+          <div className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
+            roleParam === "local"
+              ? "border-amber-200 bg-amber-50 text-amber-900"
+              : "border-green-200 bg-green-50 text-green-900"
+          }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${roleParam === "local" ? "bg-amber-600" : "bg-green-700"}`} />
+            {roleParam === "local" ? "Logging in as Local" : "Logging in as Traveller"}
+          </div>
+        )}
         <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900">Welcome back</h1>
         <p className="mt-2 text-stone-600">Log in to continue your journey.</p>
         <form onSubmit={onSubmit} className="mt-8 space-y-4">
@@ -53,10 +65,7 @@ export default function Login() {
           <div>
             <div className="flex items-center justify-between">
               <Label htmlFor="password">Password</Label>
-              <Link
-                to="/forgot-password"
-                className="text-xs text-green-800 hover:underline"
-              >
+              <Link to="/forgot-password" className="text-xs text-green-800 hover:underline">
                 Forgot password?
               </Link>
             </div>
@@ -82,7 +91,11 @@ export default function Login() {
         </form>
         <p className="mt-6 text-sm text-stone-600">
           New to LKK?{" "}
-          <Link to="/register" className="font-medium text-green-800 hover:underline" data-testid="login-to-register">
+          <Link
+            to={`/register${roleParam ? `?role=${roleParam}` : ""}`}
+            className="font-medium text-green-800 hover:underline"
+            data-testid="login-to-register"
+          >
             Create an account
           </Link>
         </p>
