@@ -15,6 +15,8 @@ import LocalDashboard from "@/pages/LocalDashboard";
 import GuideProfileEdit from "@/pages/GuideProfileEdit";
 import BookingDetail from "@/pages/BookingDetail";
 import AdminPanel from "@/pages/AdminPanel";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 
 export default function App() {
   return (
@@ -28,7 +30,8 @@ export default function App() {
             <Route path="/guides/:id" element={<GuideProfile />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
-
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route
               path="/book/:id"
               element={
