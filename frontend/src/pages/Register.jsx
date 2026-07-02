@@ -334,7 +334,7 @@ export default function Register() {
         {step === 1 && (
           <p className="mt-6 text-sm text-stone-600">
             Already have an account?{" "}
-            <Link to={`/login${role === "local" ? "?role=local" : ""}`} className="font-medium text-green-800 hover:underline" data-testid="register-to-login">
+            <Link to={`/login?role=${role}`} className="font-medium text-green-800 hover:underline" data-testid="register-to-login">
               Log in
             </Link>
           </p>
