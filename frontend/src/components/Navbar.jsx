@@ -53,7 +53,7 @@ export default function Navbar() {
             <>
               {(() => {
                 const sp = new URLSearchParams(location.search);
-                const activeRole = location.pathname === "/register" ? sp.get("role") : null;
+                const activeRole = (location.pathname === "/register" || location.pathname === "/login") ? sp.get("role") : null;
                 const localActive = activeRole === "local";
                 const travellerActive = activeRole === "traveller";
                 return (
