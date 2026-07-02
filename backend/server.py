@@ -828,6 +828,82 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
     }
 
 
+
+# --- Forgot / Reset Password -----------------------------------------------
+import secrets
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6)
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn):
+    email = body.email.lower()
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
+        if not user:
+            # Don't reveal if email exists or not
+            return {"ok": True, "message": "If that email exists, a reset link has been sent."}
+        # Generate secure token
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        # Delete any existing reset tokens for this user
+        await conn.execute("DELETE FROM password_resets WHERE user_id = $1", str(user["id"]))
+        # Save new token
+        await conn.execute(
+            """INSERT INTO password_resets (user_id, token, expires_at)
+               VALUES ($1, $2, $3)""",
+            str(user["id"]), token, expires_at
+        )
+    # Send reset email
+    reset_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/reset-password?token={token}"
+    await send_email(
+        email,
+        "Reset your LKK password 🔑",
+        f"""
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2 style="color: #166534;">Reset your password</h2>
+            <p>Hi {user['name']},</p>
+            <p>We received a request to reset your LKK password. Click the button below to choose a new one:</p>
+            <a href="{reset_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
+                Reset Password
+            </a>
+            <p style="color: #78716c; font-size: 14px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
+        </div>
+        """
+    )
+    return {"ok": True, "message": "If that email exists, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    async with db_pool.acquire() as conn:
+        reset = await conn.fetchrow(
+            "SELECT * FROM password_resets WHERE token = $1 AND used = FALSE",
+            body.token
+        )
+        if not reset:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+        if reset["expires_at"].replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Reset link has expired")
+        # Update password
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            hash_password(body.new_password), str(reset["user_id"])
+        )
+        # Mark token as used
+        await conn.execute(
+            "UPDATE password_resets SET used = TRUE WHERE token = $1",
+            body.token
+        )
+        user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", str(reset["user_id"]))
+    return {"ok": True, "message": "Password reset successfully"}
+
+
 # --- Accept / Decline booking (local) ------------------------------------
 @api.post("/bookings/{booking_id}/accept")
 async def accept_booking(booking_id: str, user: dict = Depends(require_role("local"))):
@@ -877,6 +953,80 @@ async def decline_booking(booking_id: str, user: dict = Depends(require_role("lo
             f"<h2>We're sorry!</h2><p>{user['name']} is unavailable for your requested dates. Your refund will be processed shortly.</p>"
         )
     return {"ok": True, "status": "cancelled"}
+
+
+# --- Forgot / Reset Password -----------------------------------------------
+import secrets
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6)
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn):
+    email = body.email.lower()
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
+        if not user:
+            # Don't reveal if email exists or not
+            return {"ok": True, "message": "If this email exists, a reset link has been sent."}
+        # Generate secure token
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        # Delete any existing reset tokens for this user
+        await conn.execute("DELETE FROM password_resets WHERE user_id = $1", str(user["id"]))
+        # Save new token
+        await conn.execute(
+            """INSERT INTO password_resets (user_id, token, expires_at)
+               VALUES ($1, $2, $3)""",
+            str(user["id"]), token, expires_at
+        )
+    # Send reset email
+    reset_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/reset-password?token={token}"
+    await send_email(
+        email,
+        "Reset your LKK password 🔑",
+        f"""
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #166534;">Reset your password</h2>
+            <p>Hi {user['name']},</p>
+            <p>We received a request to reset your LKK password. Click the button below to set a new password:</p>
+            <a href="{reset_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
+                Reset Password
+            </a>
+            <p style="color: #666; font-size: 14px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+            <p style="color: #666; font-size: 14px;">— The LKK Team</p>
+        </div>
+        """
+    )
+    return {"ok": True, "message": "If this email exists, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    async with db_pool.acquire() as conn:
+        reset = await conn.fetchrow(
+            "SELECT * FROM password_resets WHERE token = $1 AND used = FALSE",
+            body.token
+        )
+        if not reset:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+        if reset["expires_at"] < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Reset link has expired. Please request a new one.")
+        # Update password
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            hash_password(body.new_password), str(reset["user_id"])
+        )
+        # Mark token as used
+        await conn.execute(
+            "UPDATE password_resets SET used = TRUE WHERE token = $1",
+            body.token
+        )
+    return {"ok": True, "message": "Password updated successfully!"}
 
 # --- Health ----------------------------------------------------------------
 @api.get("/")
