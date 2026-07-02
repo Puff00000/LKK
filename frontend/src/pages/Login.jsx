@@ -13,7 +13,6 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-
   const next = new URLSearchParams(location.search).get("next") || null;
 
   const onSubmit = async (e) => {
@@ -37,7 +36,6 @@ export default function Login() {
       <div className="w-full">
         <h1 className="font-heading text-3xl font-bold tracking-tight text-stone-900">Welcome back</h1>
         <p className="mt-2 text-stone-600">Log in to continue your journey.</p>
-
         <form onSubmit={onSubmit} className="mt-8 space-y-4">
           <div>
             <Label htmlFor="email">Email</Label>
@@ -53,7 +51,15 @@ export default function Login() {
             />
           </div>
           <div>
-            <Label htmlFor="password">Password</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <Link
+                to="/forgot-password"
+                className="text-xs text-green-800 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <Input
               id="password"
               type="password"
@@ -74,7 +80,6 @@ export default function Login() {
             {submitting ? "Logging in…" : "Log in"}
           </Button>
         </form>
-
         <p className="mt-6 text-sm text-stone-600">
           New to LKK?{" "}
           <Link to="/register" className="font-medium text-green-800 hover:underline" data-testid="login-to-register">
