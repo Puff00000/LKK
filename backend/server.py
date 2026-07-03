@@ -284,6 +284,7 @@ async def on_startup() -> None:
         min_size=1,
         max_size=10,
         ssl="require"
+        statement_cache_size=0
     )
     logger.info("Database pool created")
     await seed_admin()
