@@ -114,11 +114,13 @@ async def upload_to_supabase(path: str, data: bytes, content_type: str) -> str:
     }
     async with httpx.AsyncClient(timeout=60) as cli:
         resp = await cli.put(url, headers=headers, content=data)
+    logger.info("Supabase upload status: %s", resp.status_code)
+    logger.info("Supabase upload response: %s", resp.text)
     if resp.status_code not in (200, 201):
-        raise HTTPException(status_code=503, detail="Storage upload failed")
+        logger.error("Upload failed: %s %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=503, detail=f"Storage upload failed: {resp.text}")
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}"
     return public_url
-
 # --- Email via Resend ------------------------------------------------------
 async def send_email(to: str, subject: str, html: str):
     if not RESEND_API_KEY:
