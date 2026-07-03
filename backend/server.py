@@ -111,13 +111,12 @@ async def upload_to_supabase(path: str, data: bytes, content_type: str) -> str:
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": content_type,
+        "x-upsert": "true",
     }
     async with httpx.AsyncClient(timeout=60) as cli:
-        resp = await cli.put(url, headers=headers, content=data)
-    logger.info("Supabase upload status: %s", resp.status_code)
-    logger.info("Supabase upload response: %s", resp.text)
+        resp = await cli.post(url, headers=headers, content=data)
+    logger.info("Supabase upload status: %s body: %s", resp.status_code, resp.text)
     if resp.status_code not in (200, 201):
-        logger.error("Upload failed: %s %s", resp.status_code, resp.text)
         raise HTTPException(status_code=503, detail=f"Storage upload failed: {resp.text}")
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}"
     return public_url
