@@ -33,8 +33,23 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 OTP_MOCK_CODE = "123456"
 
-PRICE_CHAT = 199
-PRICE_IN_PERSON_PER_DAY = 499
+# --- Service pricing ---------------------------------------------------
+# In-person only. 2 hours minimum, 8 hours maximum.
+# price = SERVICE_BASE_PRICE + (hours - SERVICE_BASE_HOURS) * SERVICE_HOURLY_RATE
+SERVICE_MIN_HOURS = 2
+SERVICE_MAX_HOURS = 8
+SERVICE_BASE_PRICE = 499
+SERVICE_BASE_HOURS = 2
+SERVICE_HOURLY_RATE = 250
+SERVICE_CATEGORIES = ["food", "shopping", "culture", "photography", "experience", "nature"]
+
+def compute_service_price(duration_hours: int) -> int:
+    if duration_hours < SERVICE_MIN_HOURS or duration_hours > SERVICE_MAX_HOURS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Duration must be between {SERVICE_MIN_HOURS} and {SERVICE_MAX_HOURS} hours",
+        )
+    return SERVICE_BASE_PRICE + (duration_hours - SERVICE_BASE_HOURS) * SERVICE_HOURLY_RATE
 
 app = FastAPI(title="LKK API")
 api = APIRouter(prefix="/api")
@@ -192,18 +207,31 @@ class GuideProfileIn(BaseModel):
     bio: str
     languages: List[str] = []
     specialities: List[str] = []
-    offers_chat: bool = True
-    offers_in_person: bool = False
     avatar_url: Optional[str] = None
+    video_url: Optional[str] = None
+
+class ServiceIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1)
+    category: Literal["food", "shopping", "culture", "photography", "experience", "nature"]
+    duration_hours: int = Field(ge=SERVICE_MIN_HOURS, le=SERVICE_MAX_HOURS)
+    extra_food_min: Optional[int] = None
+    extra_food_max: Optional[int] = None
+    extra_entry_min: Optional[int] = None
+    extra_entry_max: Optional[int] = None
+    extra_shopping_min: Optional[int] = None
+    extra_shopping_max: Optional[int] = None
+    extra_transport_min: Optional[int] = None
+    extra_transport_max: Optional[int] = None
+    cost_note: Optional[str] = ""
+    is_active: bool = True
 
 class BookingIn(BaseModel):
-    guide_id: str
-    trip_start: str
-    trip_end: str
+    service_id: str
+    booking_date: str
+    booking_time: str
     traveller_phone: str
     notes: Optional[str] = ""
-    package_type: Literal["chat", "in_person"] = "chat"
-    days: int = Field(default=1, ge=1, le=30)
 
 class ItineraryIn(BaseModel):
     title: str
@@ -277,6 +305,49 @@ DEMO_LOCALS = [
     },
 ]
 
+DEMO_SERVICES_BY_CITY = {
+    "Jaipur": [
+        {"title": "Bargain like a local at Johari Bazaar", "category": "shopping", "duration_hours": 2,
+         "description": "I'll take you to the best jewellery shops and negotiate on your behalf. You save money, I know the dealers.",
+         "extra_shopping_min": 500, "extra_shopping_max": 2000,
+         "cost_note": "Service fee covers my time only. Bring your own budget for anything you choose to buy."},
+        {"title": "Street food walk in Old City", "category": "food", "duration_hours": 3,
+         "description": "10 iconic spots, I eat with you, I explain the history of each dish.",
+         "extra_food_min": 150, "extra_food_max": 300,
+         "cost_note": "Carry cash — most stalls don't accept cards."},
+    ],
+    "Goa": [
+        {"title": "Hidden beaches & fishermen coves", "category": "nature", "duration_hours": 4,
+         "description": "Skip the tourist beaches — I'll take you to the coves and coastline only locals know.",
+         "extra_food_min": 200, "extra_food_max": 500,
+         "cost_note": "Lunch at a beach shack is extra, on you."},
+    ],
+    "Manali": [
+        {"title": "Sunrise day hike & monastery visit", "category": "nature", "duration_hours": 5,
+         "description": "An early hike to the best viewpoint, then a visit to a working Tibetan monastery.",
+         "extra_food_min": 100, "extra_food_max": 250,
+         "cost_note": "Warm thukpa afterwards is extra — worth it."},
+    ],
+    "Varanasi": [
+        {"title": "Sunrise boat ride & ghat walk", "category": "culture", "duration_hours": 2,
+         "description": "A quiet boat ride at sunrise followed by a walk through the ghats with stories most guides skip.",
+         "extra_entry_min": 0, "extra_entry_max": 100,
+         "cost_note": "Boat fare included in service fee."},
+    ],
+    "Bangalore": [
+        {"title": "Filter coffee & café crawl", "category": "food", "duration_hours": 3,
+         "description": "The city's best filter coffee spots and indie cafés, beyond the mall chains.",
+         "extra_food_min": 150, "extra_food_max": 400,
+         "cost_note": "Coffee and snacks at each stop are extra."},
+    ],
+    "Udaipur": [
+        {"title": "Miniature painting workshop", "category": "experience", "duration_hours": 2,
+         "description": "A hands-on Rajasthani miniature painting session overlooking Lake Pichola.",
+         "extra_shopping_min": 0, "extra_shopping_max": 500,
+         "cost_note": "Materials included. Buying your finished piece's frame is optional."},
+    ],
+}
+
 @app.on_event("startup")
 async def on_startup() -> None:
     global db_pool
@@ -321,15 +392,29 @@ async def seed_demo_data() -> None:
             )
             await conn.execute(
                 """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
-                   price, offers_chat, offers_in_person, avatar_url, rating, review_count,
-                   is_complete, verified, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)""",
+                   avatar_url, rating, review_count, is_complete, verified, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
                 guide_id, user_id, d["name"], d["city"], d["bio"],
-                d["languages"], d["specialities"],
-                199, True, True, d["avatar_url"],
+                d["languages"], d["specialities"], d["avatar_url"],
                 4.7, 0, True, True, datetime.now(timezone.utc)
             )
-        logger.info("Seeded %d demo guides", len(DEMO_LOCALS))
+            for s in DEMO_SERVICES_BY_CITY.get(d["city"], []):
+                price = compute_service_price(s["duration_hours"])
+                await conn.execute(
+                    """INSERT INTO services (id, guide_id, title, description, category,
+                       duration_hours, price, extra_food_min, extra_food_max, extra_entry_min,
+                       extra_entry_max, extra_shopping_min, extra_shopping_max,
+                       extra_transport_min, extra_transport_max, cost_note, is_active, created_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+                    str(uuid.uuid4()), guide_id, s["title"], s["description"], s["category"],
+                    s["duration_hours"], price,
+                    s.get("extra_food_min"), s.get("extra_food_max"),
+                    s.get("extra_entry_min"), s.get("extra_entry_max"),
+                    s.get("extra_shopping_min"), s.get("extra_shopping_max"),
+                    s.get("extra_transport_min"), s.get("extra_transport_max"),
+                    s.get("cost_note", ""), True, datetime.now(timezone.utc)
+                )
+        logger.info("Seeded %d demo guides with services", len(DEMO_LOCALS))
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
@@ -438,8 +523,6 @@ async def upload(file: UploadFile = File(...), user: dict = Depends(get_current_
 @api.get("/guides")
 async def list_guides(
     city: Optional[str] = None,
-    min_price: Optional[int] = None,
-    max_price: Optional[int] = None,
     min_rating: Optional[float] = None,
     sort: Optional[str] = "rating",
 ):
@@ -450,22 +533,13 @@ async def list_guides(
         query += f" AND LOWER(city) = LOWER(${i})"
         params.append(city)
         i += 1
-    if min_price is not None:
-        query += f" AND price >= ${i}"
-        params.append(min_price)
-        i += 1
-    if max_price is not None:
-        query += f" AND price <= ${i}"
-        params.append(max_price)
-        i += 1
     if min_rating is not None:
         query += f" AND rating >= ${i}"
         params.append(min_rating)
         i += 1
     sort_map = {
         "rating": "rating DESC",
-        "price_low": "price ASC",
-        "price_high": "price DESC",
+        "newest": "created_at DESC",
     }
     query += f" ORDER BY {sort_map.get(sort or 'rating', 'rating DESC')}"
     async with db_pool.acquire() as conn:
@@ -494,10 +568,18 @@ async def get_guide(guide_id: str):
             "SELECT * FROM reviews WHERE guide_id = $1 ORDER BY created_at DESC LIMIT 50",
             guide_id
         )
+        services = await conn.fetch(
+            "SELECT * FROM services WHERE guide_id = $1 AND is_active = TRUE ORDER BY created_at ASC",
+            guide_id
+        )
     guide_dict = row_to_dict(guide)
     guide_dict["id"] = str(guide_dict["id"])
     guide_dict["user_id"] = str(guide_dict["user_id"])
-    return {"guide": guide_dict, "reviews": rows_to_list(reviews)}
+    svc_list = rows_to_list(services)
+    for s in svc_list:
+        s["id"] = str(s["id"])
+        s["guide_id"] = str(s["guide_id"])
+    return {"guide": guide_dict, "reviews": rows_to_list(reviews), "services": svc_list}
 
 @api.get("/profile/guide/me")
 async def my_guide_profile(user: dict = Depends(require_role("local"))):
@@ -510,70 +592,214 @@ async def my_guide_profile(user: dict = Depends(require_role("local"))):
         return {"guide": d}
     return {"guide": None}
 
+async def _refresh_guide_completeness(conn, guide_id: str) -> None:
+    guide = await conn.fetchrow("SELECT city, bio FROM guides WHERE id = $1", guide_id)
+    service_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM services WHERE guide_id = $1 AND is_active = TRUE", guide_id
+    )
+    is_complete = bool(guide and guide["city"] and guide["bio"] and service_count > 0)
+    await conn.execute("UPDATE guides SET is_complete = $1 WHERE id = $2", is_complete, guide_id)
+
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
-    if not body.offers_chat and not body.offers_in_person:
-        raise HTTPException(status_code=400, detail="Turn on at least one package tier")
-    price = PRICE_CHAT if body.offers_chat else PRICE_IN_PERSON_PER_DAY
-    is_complete = bool(body.city and body.bio and (body.offers_chat or body.offers_in_person))
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
         if existing:
             await conn.execute(
                 """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
-                   offers_chat=$5, offers_in_person=$6, avatar_url=$7, price=$8, is_complete=$9
-                   WHERE user_id=$10""",
+                   avatar_url=$5, video_url=$6 WHERE user_id=$7""",
                 body.city, body.bio, body.languages, body.specialities,
-                body.offers_chat, body.offers_in_person, body.avatar_url,
-                price, is_complete, str(user["id"])
+                body.avatar_url, body.video_url, str(user["id"])
             )
+            guide_id = str(existing["id"])
         else:
             guide_id = str(uuid.uuid4())
             await conn.execute(
                 """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
-                   price, offers_chat, offers_in_person, avatar_url, rating, review_count,
-                   is_complete, verified, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)""",
+                   avatar_url, video_url, rating, review_count, is_complete, verified, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
                 guide_id, str(user["id"]), user["name"], body.city, body.bio,
-                body.languages, body.specialities, price,
-                body.offers_chat, body.offers_in_person, body.avatar_url,
-                0.0, 0, is_complete, False, datetime.now(timezone.utc)
+                body.languages, body.specialities, body.avatar_url, body.video_url,
+                0.0, 0, False, False, datetime.now(timezone.utc)
             )
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        await _refresh_guide_completeness(conn, guide_id)
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
     d = row_to_dict(guide)
     d["id"] = str(d["id"])
     d["user_id"] = str(d["user_id"])
     return {"guide": d}
 
+# --- Services ----------------------------------------------------------
+def _service_out(row) -> dict:
+    d = row_to_dict(row)
+    d["id"] = str(d["id"])
+    d["guide_id"] = str(d["guide_id"])
+    return d
+
+@api.get("/services")
+async def list_services(
+    city: Optional[str] = None,
+    category: Optional[str] = None,
+    min_duration: Optional[int] = None,
+    max_duration: Optional[int] = None,
+    guide_id: Optional[str] = None,
+    sort: Optional[str] = "newest",
+):
+    query = """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
+               g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified
+               FROM services s JOIN guides g ON g.id = s.guide_id
+               WHERE s.is_active = TRUE AND g.is_complete = TRUE"""
+    params = []
+    i = 1
+    if city:
+        query += f" AND LOWER(g.city) = LOWER(${i})"
+        params.append(city)
+        i += 1
+    if category:
+        query += f" AND s.category = ${i}"
+        params.append(category)
+        i += 1
+    if min_duration is not None:
+        query += f" AND s.duration_hours >= ${i}"
+        params.append(min_duration)
+        i += 1
+    if max_duration is not None:
+        query += f" AND s.duration_hours <= ${i}"
+        params.append(max_duration)
+        i += 1
+    if guide_id:
+        query += f" AND s.guide_id = ${i}"
+        params.append(guide_id)
+        i += 1
+    sort_map = {
+        "newest": "s.created_at DESC",
+        "price_low": "s.price ASC",
+        "price_high": "s.price DESC",
+        "rating": "g.rating DESC",
+    }
+    query += f" ORDER BY {sort_map.get(sort or 'newest', 's.created_at DESC')}"
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+    result = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["id"] = str(d["id"])
+        d["guide_id"] = str(d["guide_id"])
+        result.append(d)
+    return result
+
+@api.get("/services/{service_id}")
+async def get_service(service_id: str):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
+               g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified,
+               g.bio AS guide_bio
+               FROM services s JOIN guides g ON g.id = s.guide_id WHERE s.id = $1""",
+            service_id
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return _service_out(row)
+
+@api.get("/guides/{guide_id}/services")
+async def list_guide_services(guide_id: str):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM services WHERE guide_id = $1 ORDER BY created_at ASC", guide_id
+        )
+    return [_service_out(r) for r in rows]
+
+@api.post("/services")
+async def create_service(body: ServiceIn, user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=400, detail="Create your local profile before adding services")
+        price = compute_service_price(body.duration_hours)
+        service_id = str(uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO services (id, guide_id, title, description, category, duration_hours, price,
+               extra_food_min, extra_food_max, extra_entry_min, extra_entry_max,
+               extra_shopping_min, extra_shopping_max, extra_transport_min, extra_transport_max,
+               cost_note, is_active, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+            service_id, str(guide["id"]), body.title.strip(), body.description.strip(), body.category,
+            body.duration_hours, price,
+            body.extra_food_min, body.extra_food_max, body.extra_entry_min, body.extra_entry_max,
+            body.extra_shopping_min, body.extra_shopping_max, body.extra_transport_min, body.extra_transport_max,
+            body.cost_note or "", body.is_active, datetime.now(timezone.utc)
+        )
+        await _refresh_guide_completeness(conn, str(guide["id"]))
+        row = await conn.fetchrow("SELECT * FROM services WHERE id = $1", service_id)
+    return _service_out(row)
+
+@api.put("/services/{service_id}")
+async def update_service(service_id: str, body: ServiceIn, user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        existing = await conn.fetchrow("SELECT * FROM services WHERE id = $1", service_id)
+        if not guide or not existing or str(existing["guide_id"]) != str(guide["id"]):
+            raise HTTPException(status_code=404, detail="Service not found")
+        price = compute_service_price(body.duration_hours)
+        await conn.execute(
+            """UPDATE services SET title=$1, description=$2, category=$3, duration_hours=$4, price=$5,
+               extra_food_min=$6, extra_food_max=$7, extra_entry_min=$8, extra_entry_max=$9,
+               extra_shopping_min=$10, extra_shopping_max=$11, extra_transport_min=$12, extra_transport_max=$13,
+               cost_note=$14, is_active=$15 WHERE id=$16""",
+            body.title.strip(), body.description.strip(), body.category, body.duration_hours, price,
+            body.extra_food_min, body.extra_food_max, body.extra_entry_min, body.extra_entry_max,
+            body.extra_shopping_min, body.extra_shopping_max, body.extra_transport_min, body.extra_transport_max,
+            body.cost_note or "", body.is_active, service_id
+        )
+        await _refresh_guide_completeness(conn, str(guide["id"]))
+        row = await conn.fetchrow("SELECT * FROM services WHERE id = $1", service_id)
+    return _service_out(row)
+
+@api.delete("/services/{service_id}")
+async def delete_service(service_id: str, user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        existing = await conn.fetchrow("SELECT * FROM services WHERE id = $1", service_id)
+        if not guide or not existing or str(existing["guide_id"]) != str(guide["id"]):
+            raise HTTPException(status_code=404, detail="Service not found")
+        active_booking = await conn.fetchval(
+            """SELECT COUNT(*) FROM bookings WHERE service_id = $1
+               AND status NOT IN ('completed', 'cancelled', 'disputed')""",
+            service_id
+        )
+        if active_booking:
+            raise HTTPException(status_code=400, detail="Can't delete a service with an active booking")
+        await conn.execute("DELETE FROM services WHERE id = $1", service_id)
+        await _refresh_guide_completeness(conn, str(guide["id"]))
+    return {"ok": True}
+
 # --- Bookings --------------------------------------------------------------
 @api.post("/bookings")
 async def create_booking(body: BookingIn, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", body.guide_id)
+        service = await conn.fetchrow("SELECT * FROM services WHERE id = $1", body.service_id)
+        if not service or not service["is_active"]:
+            raise HTTPException(status_code=404, detail="Service not found")
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(service["guide_id"]))
         if not guide:
             raise HTTPException(status_code=404, detail="Guide not found")
-        if body.package_type == "chat":
-            if not guide["offers_chat"]:
-                raise HTTPException(status_code=400, detail="This guide does not offer chat-only")
-            amount = PRICE_CHAT
-            days = 1
-        else:
-            if not guide["offers_in_person"]:
-                raise HTTPException(status_code=400, detail="This guide does not offer in-person")
-            days = max(1, int(body.days))
-            amount = PRICE_IN_PERSON_PER_DAY * days
+        amount = service["price"]
+        duration_hours = service["duration_hours"]
         platform_fee = round(amount * PLATFORM_FEE_PERCENT / 100)
         local_payout = amount - platform_fee
         booking_id = str(uuid.uuid4())
         await conn.execute(
             """INSERT INTO bookings (id, guide_id, guide_name, guide_city, local_user_id,
-               traveller_user_id, traveller_name, traveller_phone, trip_start, trip_end,
-               notes, package_type, days, amount, platform_fee, local_payout, status, created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+               traveller_user_id, traveller_name, traveller_phone, service_id, service_title,
+               booking_date, booking_time, duration_hours, notes, amount, platform_fee,
+               local_payout, status, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)""",
             booking_id, str(guide["id"]), guide["name"], guide["city"], str(guide["user_id"]),
             str(user["id"]), user["name"], body.traveller_phone,
-            body.trip_start, body.trip_end, body.notes or "",
-            body.package_type, days, amount, platform_fee, local_payout,
+            str(service["id"]), service["title"],
+            body.booking_date, body.booking_time, duration_hours, body.notes or "",
+            amount, platform_fee, local_payout,
             "pending_payment", datetime.now(timezone.utc)
         )
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
@@ -581,7 +807,7 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
     await send_email(
         user["email"],
         "Booking Confirmed — LKK 🌿",
-        f"<h2>Your booking is confirmed!</h2><p>You've booked {guide['name']} in {guide['city']}. Amount: ₹{amount}</p>"
+        f"<h2>Your booking is confirmed!</h2><p>You've booked '{service['title']}' with {guide['name']} in {guide['city']} for {duration_hours}hrs. Amount: ₹{amount}</p>"
     )
     d = row_to_dict(booking)
     d["id"] = str(d["id"])
