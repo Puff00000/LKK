@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, MessageCircle, Sparkles } from "lucide-react";
+import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, MessageCircle, Sparkles, Video, Trash2, Clock, XCircle } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -35,7 +35,9 @@ export default function GuideProfileEdit() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [videoUploading, setVideoUploading] = useState(false);
   const fileRef = useRef(null);
+  const videoFileRef = useRef(null);
 
   useEffect(() => {
     api.get("/profile/guide/me").then(({ data }) => {
@@ -98,6 +100,50 @@ export default function GuideProfileEdit() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const onVideoFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (!["mp4", "mov", "webm"].includes(ext)) {
+      toast.error("Only MP4, MOV, or WEBM videos are allowed");
+      if (videoFileRef.current) videoFileRef.current.value = "";
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error("Video is too large (max 50MB)");
+      if (videoFileRef.current) videoFileRef.current.value = "";
+      return;
+    }
+    setVideoUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await api.post("/profile/guide/video", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setGuide(data.guide);
+      toast.success("Video uploaded — it'll show on your profile once approved.");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setVideoUploading(false);
+      if (videoFileRef.current) videoFileRef.current.value = "";
+    }
+  };
+
+  const removeVideo = async () => {
+    setVideoUploading(true);
+    try {
+      await api.delete("/profile/guide/video");
+      setGuide((g) => (g ? { ...g, video_url: null, video_approved: false, video_rejected: false, video_rejection_reason: null, video_status: "none" } : g));
+      toast.success("Video removed");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setVideoUploading(false);
     }
   };
 
@@ -171,6 +217,86 @@ export default function GuideProfileEdit() {
                 {uploading ? "Uploading…" : previewSrc ? "Replace photo" : "Upload photo"}
               </Button>
               <p className="mt-1.5 text-xs text-stone-500">JPG / PNG / WEBP up to 5MB.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* INTRO VIDEO */}
+        <div>
+          <Label>Intro video <span className="text-stone-400 font-normal">(optional)</span></Label>
+          <p className="mt-1 text-xs text-stone-500">
+            A short video of yourself builds trust with travellers. Every upload is reviewed by our team before it goes live.
+          </p>
+
+          {guide?.video_url && (
+            <div className="mt-3 flex items-center gap-2">
+              {guide.video_status === "approved" && (
+                <Badge data-testid="video-status-approved" className="bg-green-800 text-white hover:bg-green-800 gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Approved — live on your profile
+                </Badge>
+              )}
+              {guide.video_status === "pending" && (
+                <Badge data-testid="video-status-pending" variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
+                  <Clock className="h-3.5 w-3.5" /> Pending review
+                </Badge>
+              )}
+              {guide.video_status === "rejected" && (
+                <Badge data-testid="video-status-rejected" variant="outline" className="border-red-300 bg-red-50 text-red-800 gap-1">
+                  <XCircle className="h-3.5 w-3.5" /> Rejected
+                </Badge>
+              )}
+            </div>
+          )}
+
+          {guide?.video_status === "rejected" && guide?.video_rejection_reason && (
+            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" data-testid="video-rejection-reason">
+              {guide.video_rejection_reason}
+            </div>
+          )}
+
+          <div className="mt-3 flex items-start gap-4">
+            <div className="h-24 w-40 overflow-hidden rounded-xl bg-stone-100 ring-1 ring-stone-200 grid place-items-center">
+              {guide?.video_url ? (
+                <video src={guide.video_url} className="h-full w-full object-cover" muted controls data-testid="video-preview" />
+              ) : (
+                <Video className="h-8 w-8 text-stone-300" />
+              )}
+            </div>
+            <div>
+              <input
+                ref={videoFileRef}
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm"
+                onChange={onVideoFile}
+                className="hidden"
+                data-testid="video-file-input"
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => guide ? videoFileRef.current?.click() : toast.error("Save your profile first, then add a video")}
+                  disabled={videoUploading}
+                  data-testid="video-upload-btn"
+                  className="border-stone-300"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {videoUploading ? "Uploading…" : guide?.video_url ? "Replace video" : "Upload video"}
+                </Button>
+                {guide?.video_url && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={removeVideo}
+                    disabled={videoUploading}
+                    data-testid="video-remove-btn"
+                    className="border-red-200 text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              <p className="mt-1.5 text-xs text-stone-500">MP4 / MOV / WEBM up to 50MB.</p>
             </div>
           </div>
         </div>
