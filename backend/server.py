@@ -118,17 +118,16 @@ def rows_to_list(rows) -> list:
     return [dict(row) for row in rows]
 
 # --- Supabase Storage ------------------------------------------------------
-async def upload_to_supabase(path: str, data: bytes, content_type: str) -> str:
+async def upload_to_supabase(path: str, data: bytes, content_type: str, bucket: str = "avatars") -> str:
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise HTTPException(status_code=503, detail="Storage not configured")
-    bucket = "avatars"
     url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{path}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": content_type,
         "x-upsert": "true",
     }
-    async with httpx.AsyncClient(timeout=60) as cli:
+    async with httpx.AsyncClient(timeout=120) as cli:
         resp = await cli.post(url, headers=headers, content=data)
     logger.info("Supabase upload status: %s body: %s", resp.status_code, resp.text)
     if resp.status_code not in (200, 201):
@@ -208,7 +207,6 @@ class GuideProfileIn(BaseModel):
     languages: List[str] = []
     specialities: List[str] = []
     avatar_url: Optional[str] = None
-    video_url: Optional[str] = None
 
 class ServiceIn(BaseModel):
     title: str = Field(min_length=1, max_length=120)
@@ -519,7 +517,118 @@ async def upload(file: UploadFile = File(...), user: dict = Depends(get_current_
         )
     return {"path": path, "url": public_url}
 
-# --- Guide profile ---------------------------------------------------------
+# --- Local intro video (upload + moderation) --------------------------------
+VIDEO_MIME_BY_EXT = {
+    "mp4": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+}
+VIDEO_MAX_BYTES = 50 * 1024 * 1024  # 50MB
+VIDEO_BUCKET = "guide-videos"
+
+def video_status(guide: dict) -> str:
+    """Derive a single human-readable status from the three video moderation columns."""
+    if not guide.get("video_url"):
+        return "none"
+    if guide.get("video_approved"):
+        return "approved"
+    if guide.get("video_rejected"):
+        return "rejected"
+    return "pending"
+
+@api.post("/profile/guide/video")
+async def upload_guide_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
+    if ext not in VIDEO_MIME_BY_EXT:
+        raise HTTPException(status_code=400, detail="Only MP4/MOV/WEBM videos allowed")
+    content_type = VIDEO_MIME_BY_EXT[ext]
+    data = await file.read()
+    if len(data) > VIDEO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Video too large (max 50MB)")
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=400, detail="Create your local profile before adding a video")
+        path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
+        public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
+        # New upload always resets moderation state back to pending review
+        await conn.execute(
+            """UPDATE guides SET video_url=$1, video_approved=FALSE, video_rejected=FALSE,
+               video_rejection_reason=NULL WHERE id=$2""",
+            public_url, str(guide["id"])
+        )
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(guide["id"]))
+    d = row_to_dict(guide)
+    d["id"] = str(d["id"])
+    d["user_id"] = str(d["user_id"])
+    d["video_status"] = video_status(d)
+    return {"guide": d}
+
+@api.delete("/profile/guide/video")
+async def delete_guide_video(user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=404, detail="Guide profile not found")
+        await conn.execute(
+            """UPDATE guides SET video_url=NULL, video_approved=FALSE, video_rejected=FALSE,
+               video_rejection_reason=NULL WHERE id=$1""",
+            str(guide["id"])
+        )
+    return {"ok": True}
+
+@api.get("/admin/videos")
+async def admin_list_videos(status: Optional[str] = None, user: dict = Depends(require_role("admin"))):
+    """status: pending | approved | rejected | None (all guides that have a video)"""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM guides WHERE video_url IS NOT NULL ORDER BY created_at DESC"
+        )
+    result = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["id"] = str(d["id"])
+        d["user_id"] = str(d["user_id"])
+        d["video_status"] = video_status(d)
+        if status and d["video_status"] != status:
+            continue
+        result.append(d)
+    return result
+
+class VideoReviewIn(BaseModel):
+    approved: bool
+    reason: Optional[str] = None
+
+@api.post("/admin/guides/{guide_id}/video/review")
+async def admin_review_video(guide_id: str, body: VideoReviewIn, user: dict = Depends(require_role("admin"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
+        if not guide or not guide["video_url"]:
+            raise HTTPException(status_code=404, detail="No video submitted for this guide")
+        if not body.approved and not (body.reason and body.reason.strip()):
+            raise HTTPException(status_code=400, detail="A reason is required when rejecting a video")
+        await conn.execute(
+            """UPDATE guides SET video_approved=$1, video_rejected=$2, video_rejection_reason=$3
+               WHERE id=$4""",
+            body.approved, not body.approved,
+            (body.reason or "").strip() if not body.approved else None,
+            guide_id
+        )
+        traveller_facing_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(guide["user_id"]))
+    if traveller_facing_user:
+        if body.approved:
+            await send_email(
+                traveller_facing_user["email"],
+                "Your intro video is live — LKK 🌿",
+                "<h2>Approved!</h2><p>Your intro video is now visible on your public profile.</p>"
+            )
+        else:
+            await send_email(
+                traveller_facing_user["email"],
+                "Your intro video needs a change — LKK 🌿",
+                f"<h2>Not quite ready yet</h2><p>{(body.reason or '').strip()}</p><p>Please upload a new video from your profile page.</p>"
+            )
+    return {"ok": True, "approved": body.approved}
+
+
 @api.get("/guides")
 async def list_guides(
     city: Optional[str] = None,
@@ -575,6 +684,9 @@ async def get_guide(guide_id: str):
     guide_dict = row_to_dict(guide)
     guide_dict["id"] = str(guide_dict["id"])
     guide_dict["user_id"] = str(guide_dict["user_id"])
+    # Only ever surface a video publicly once an admin has approved it
+    if not guide_dict.get("video_approved"):
+        guide_dict["video_url"] = None
     svc_list = rows_to_list(services)
     for s in svc_list:
         s["id"] = str(s["id"])
@@ -589,6 +701,7 @@ async def my_guide_profile(user: dict = Depends(require_role("local"))):
         d = row_to_dict(guide)
         d["id"] = str(d["id"])
         d["user_id"] = str(d["user_id"])
+        d["video_status"] = video_status(d)
         return {"guide": d}
     return {"guide": None}
 
@@ -607,19 +720,19 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
         if existing:
             await conn.execute(
                 """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
-                   avatar_url=$5, video_url=$6 WHERE user_id=$7""",
+                   avatar_url=$5 WHERE user_id=$6""",
                 body.city, body.bio, body.languages, body.specialities,
-                body.avatar_url, body.video_url, str(user["id"])
+                body.avatar_url, str(user["id"])
             )
             guide_id = str(existing["id"])
         else:
             guide_id = str(uuid.uuid4())
             await conn.execute(
                 """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
-                   avatar_url, video_url, rating, review_count, is_complete, verified, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                   avatar_url, rating, review_count, is_complete, verified, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
                 guide_id, str(user["id"]), user["name"], body.city, body.bio,
-                body.languages, body.specialities, body.avatar_url, body.video_url,
+                body.languages, body.specialities, body.avatar_url,
                 0.0, 0, False, False, datetime.now(timezone.utc)
             )
         await _refresh_guide_completeness(conn, guide_id)
@@ -627,6 +740,7 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
     d = row_to_dict(guide)
     d["id"] = str(d["id"])
     d["user_id"] = str(d["user_id"])
+    d["video_status"] = video_status(d)
     return {"guide": d}
 
 # --- Services ----------------------------------------------------------
