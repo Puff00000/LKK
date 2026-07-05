@@ -223,7 +223,7 @@ export default function GuideProfileEdit() {
 
         {/* INTRO VIDEO */}
         <div>
-          <Label>Intro video <span className="text-stone-400 font-normal">(optional)</span></Label>
+          <Label>Intro video <span className="text-stone-400 font-normal">()</span></Label>
           <p className="mt-1 text-xs text-stone-500">
             A short video of yourself builds trust with travellers. Every upload is reviewed by our team before it goes live.
           </p>
