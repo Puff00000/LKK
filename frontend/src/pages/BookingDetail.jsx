@@ -12,8 +12,9 @@ import { toast } from "sonner";
 
 const STATUS_LABEL = {
   pending_payment: "Awaiting payment",
-  paid: "Paid · awaiting itinerary",
-  itinerary_delivered: "Itinerary delivered",
+  paid: "Paid · awaiting local's acceptance",
+  accepted: "Accepted · meetup confirmed",
+  itinerary_delivered: "Accepted · meetup confirmed",
   completed: "Completed",
   cancelled: "Cancelled",
   disputed: "In dispute",
@@ -25,13 +26,12 @@ export default function BookingDetail() {
   const [booking, setBooking] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-  const [itinTitle, setItinTitle] = useState("");
-  const [itinContent, setItinContent] = useState("");
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState("");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
   const messagesEndRef = useRef(null);
 
   const loadAll = async () => {
@@ -71,29 +71,16 @@ export default function BookingDetail() {
     }
   };
 
-  const deliverItinerary = async () => {
-    if (!itinTitle.trim() || !itinContent.trim()) {
-      toast.error("Add a title and itinerary content.");
-      return;
-    }
-    try {
-      await api.post(`/bookings/${id}/itinerary`, { title: itinTitle, content: itinContent });
-      toast.success("Itinerary delivered. Traveller has been notified.");
-      setItinTitle("");
-      setItinContent("");
-      loadAll();
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || e.message);
-    }
-  };
-
-  const confirmItinerary = async () => {
+  const confirmCompletion = async () => {
+    setConfirming(true);
     try {
       await api.post(`/bookings/${id}/confirm`);
-      toast.success("Itinerary confirmed. Payment released to your local.");
+      toast.success("Confirmed! Payment released to your local.");
       loadAll();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setConfirming(false);
     }
   };
 
@@ -126,8 +113,9 @@ export default function BookingDetail() {
           <h1 className="mt-2 font-heading text-2xl sm:text-3xl font-bold tracking-tight text-stone-900">
             {isTraveller ? booking.guide_name : booking.traveller_name} · {booking.guide_city}
           </h1>
-          <div className="mt-2 text-sm text-stone-500">
-            {booking.trip_start} → {booking.trip_end}
+          <div className="mt-1 text-sm text-stone-700">{booking.service_title}</div>
+          <div className="mt-1 text-sm text-stone-500">
+            {booking.booking_date} · {booking.booking_time} · {booking.duration_hours}h
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -142,19 +130,38 @@ export default function BookingDetail() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_360px] items-start">
-        {/* Left: Itinerary + actions */}
+        {/* Left: Meetup + actions */}
         <div className="space-y-6">
-          <section className="rounded-2xl border border-stone-200 bg-white p-6" data-testid="itinerary-section">
-            <h2 className="font-heading text-xl font-bold text-stone-900">Itinerary</h2>
-            {booking.itinerary ? (
-              <div className="mt-4">
-                <div className="font-heading text-lg text-green-900">{booking.itinerary.title}</div>
-                <p className="mt-2 whitespace-pre-line text-stone-700 leading-relaxed">{booking.itinerary.content}</p>
+          <section className="rounded-2xl border border-stone-200 bg-white p-6" data-testid="meetup-section">
+            <h2 className="font-heading text-xl font-bold text-stone-900">Your experience</h2>
 
-                {isTraveller && booking.status === "itinerary_delivered" && (
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <Button data-testid="confirm-itinerary-btn" onClick={confirmItinerary} className="bg-green-800 text-white hover:bg-green-900 hover:text-white">
-                      <CheckCircle2 className="mr-2 h-4 w-4" /> Confirm & release payment
+            {booking.status === "pending_payment" && (
+              <p className="mt-4 text-stone-500">Waiting on payment to confirm this booking.</p>
+            )}
+
+            {booking.status === "paid" && (
+              <p className="mt-4 text-stone-500">
+                {isLocal
+                  ? "Accept or decline this booking from your dashboard to confirm the meetup."
+                  : "Waiting for your local to accept the booking."}
+              </p>
+            )}
+
+            {(booking.status === "accepted" || booking.status === "itinerary_delivered") && (
+              <div className="mt-4">
+                <div className="rounded-lg bg-green-50 border border-green-100 px-4 py-3 text-sm text-green-900">
+                  Meetup confirmed for <span className="font-medium">{booking.booking_date} at {booking.booking_time}</span>, {booking.duration_hours} hours. Use chat to sort out the exact meeting point.
+                </div>
+                {isTraveller && (
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Button
+                      data-testid="confirm-itinerary-btn"
+                      onClick={confirmCompletion}
+                      disabled={confirming}
+                      className="bg-green-800 text-white hover:bg-green-900 hover:text-white"
+                    >
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {confirming ? "Confirming…" : "Confirm experience happened & release payment"}
                     </Button>
                     <Dialog open={disputeOpen} onOpenChange={setDisputeOpen}>
                       <DialogTrigger asChild>
@@ -172,15 +179,26 @@ export default function BookingDetail() {
                     </Dialog>
                   </div>
                 )}
-                {isTraveller && booking.status === "completed" && (
+                {isLocal && (
+                  <p className="mt-4 text-sm text-stone-500">Once you've delivered the experience, your traveller confirms it here and your payout is released.</p>
+                )}
+              </div>
+            )}
+
+            {booking.status === "completed" && (
+              <div className="mt-4">
+                <div className="rounded-lg bg-stone-50 border border-stone-100 px-4 py-3 text-sm text-stone-700">
+                  ✓ Experience completed on {booking.booking_date}.
+                </div>
+                {isTraveller && (
                   <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
                     <DialogTrigger asChild>
-                      <Button data-testid="leave-review-btn" variant="outline" className="mt-6 border-stone-300 text-stone-700 hover:bg-stone-50">
+                      <Button data-testid="leave-review-btn" variant="outline" className="mt-5 border-stone-300 text-stone-700 hover:bg-stone-50">
                         <Star className="mr-2 h-4 w-4" /> Leave a review
                       </Button>
                     </DialogTrigger>
                     <DialogContent>
-                      <DialogHeader><DialogTitle>How was your trip?</DialogTitle></DialogHeader>
+                      <DialogHeader><DialogTitle>How was your experience?</DialogTitle></DialogHeader>
                       <div className="flex items-center gap-2">
                         {[1, 2, 3, 4, 5].map((n) => (
                           <button
@@ -202,20 +220,14 @@ export default function BookingDetail() {
                   </Dialog>
                 )}
               </div>
-            ) : isLocal ? (
-              booking.status === "paid" ? (
-                <div className="mt-4 space-y-3" data-testid="deliver-itinerary-form">
-                  <Input data-testid="itin-title" placeholder="Itinerary title — e.g. A day in old Jaipur" value={itinTitle} onChange={(e) => setItinTitle(e.target.value)} />
-                  <Textarea data-testid="itin-content" rows={10} placeholder="7:00 AM — Sunrise chai at Nahargarh fort…" value={itinContent} onChange={(e) => setItinContent(e.target.value)} />
-                  <Button data-testid="deliver-itinerary-btn" onClick={deliverItinerary} className="bg-green-800 text-white hover:bg-green-900 hover:text-white">
-                    Deliver itinerary
-                  </Button>
-                </div>
-              ) : (
-                <p className="mt-4 text-stone-500">Itinerary will be available to write once the traveller pays.</p>
-              )
-            ) : (
-              <p className="mt-4 text-stone-500">Your local is preparing your itinerary.</p>
+            )}
+
+            {booking.status === "cancelled" && (
+              <p className="mt-4 text-stone-500">This booking was cancelled.</p>
+            )}
+
+            {booking.status === "disputed" && (
+              <p className="mt-4 text-red-700">This booking is under dispute — our team is reviewing it.</p>
             )}
           </section>
 
