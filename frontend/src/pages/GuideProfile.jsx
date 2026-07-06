@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { api, inr } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useAuth } from "@/contexts/AuthContext";
-import { Star, MapPin, Languages, Sparkles, ArrowLeft, ShieldCheck, ShieldAlert, MessageCircle } from "lucide-react";
+import { Star, MapPin, Languages, Sparkles, ArrowLeft, ShieldCheck, ShieldAlert, Clock } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 const absoluteUrl = (u) => (!u ? "" : u.startsWith("http") ? u : `${API_URL}${u}`);
 
+const CATEGORY_LABELS = {
+  food: "🍜 Food & Drink",
+  shopping: "🛍️ Shopping",
+  culture: "🏛️ Culture & Heritage",
+  photography: "📸 Photography",
+  experience: "🎨 Experience",
+  nature: "🌿 Nature",
+};
+
 export default function GuideProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,16 +32,7 @@ export default function GuideProfile() {
   if (loading) return <div className="grid place-items-center py-20 text-stone-500" data-testid="guide-loading">Loading…</div>;
   if (!data) return <div className="py-20 text-center text-stone-500">Guide not found</div>;
 
-  const { guide, reviews } = data;
-
-  const handleBook = (tier) => {
-    if (!user) return navigate(`/login?next=/book/${guide.id}?tier=${tier}`);
-    if (user.role !== "traveller") return navigate("/");
-    navigate(`/book/${guide.id}?tier=${tier}`);
-  };
-
-  const offersChat = guide.offers_chat !== false;
-  const offersInPerson = guide.offers_in_person === true;
+  const { guide, reviews, services } = data;
 
   return (
     <div data-testid="guide-profile-page" className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8">
@@ -79,6 +76,12 @@ export default function GuideProfile() {
             </div>
           </div>
 
+          {guide.video_url && (
+            <div className="mt-6 overflow-hidden rounded-2xl bg-stone-900" data-testid="guide-intro-video">
+              <video src={guide.video_url} controls className="w-full max-h-[360px] object-cover" />
+            </div>
+          )}
+
           <p className="mt-7 text-base text-stone-700 leading-relaxed whitespace-pre-line">{guide.bio}</p>
 
           <div className="mt-10 grid gap-6 sm:grid-cols-2">
@@ -103,7 +106,7 @@ export default function GuideProfile() {
           <div className="mt-12">
             <h2 className="font-heading text-2xl font-bold text-stone-900">Reviews</h2>
             {reviews.length === 0 ? (
-              <p className="mt-3 text-stone-500" data-testid="no-reviews">No reviews yet. Be the first to travel with {guide.name.split(" ")[0]}.</p>
+              <p className="mt-3 text-stone-500" data-testid="no-reviews">No reviews yet. Be the first to book {guide.name.split(" ")[0]}.</p>
             ) : (
               <ul className="mt-4 space-y-4">
                 {reviews.map((r) => (
@@ -122,52 +125,34 @@ export default function GuideProfile() {
           </div>
         </div>
 
-        {/* Book card(s) */}
-        <aside className="space-y-4 lg:sticky lg:top-24" data-testid="booking-tiers">
-          {offersChat && (
-            <div className="rounded-2xl border-2 border-amber-300 bg-white p-5" data-testid="tier-chat-card">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
-                <MessageCircle className="h-4 w-4" /> Chat-only
-              </div>
-              <div className="mt-2 flex items-baseline gap-1 font-heading">
-                <span className="text-3xl font-bold text-stone-900">{inr(199)}</span>
-                <span className="text-xs text-stone-500">/ one-time</span>
-              </div>
-              <p className="mt-2 text-sm text-stone-600 leading-relaxed">
-                Custom itinerary in writing + in-app chat with {guide.name.split(" ")[0]} before & during your trip.
-              </p>
-              <Button
-                data-testid="book-chat-btn"
-                onClick={() => handleBook("chat")}
-                className="mt-4 w-full h-11 bg-amber-600 text-white hover:bg-amber-700 hover:text-white"
-              >
-                Book chat-only
-              </Button>
+        {/* Services list */}
+        <aside className="space-y-3 lg:sticky lg:top-24" data-testid="services-list">
+          <div className="text-xs uppercase tracking-[0.2em] text-stone-500">
+            {services.length} bookable experience{services.length !== 1 ? "s" : ""}
+          </div>
+          {services.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-stone-300 p-5 text-sm text-stone-500">
+              No services listed yet.
             </div>
-          )}
-          {offersInPerson && (
-            <div className="rounded-2xl border-2 border-green-700 bg-white p-5" data-testid="tier-in-person-card">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
-                <Sparkles className="h-4 w-4" /> In-person
-              </div>
-              <div className="mt-2 flex items-baseline gap-1 font-heading">
-                <span className="text-3xl font-bold text-stone-900">{inr(499)}</span>
-                <span className="text-xs text-stone-500">/ per day</span>
-              </div>
-              <p className="mt-2 text-sm text-stone-600 leading-relaxed">
-                Everything in chat-only — plus {guide.name.split(" ")[0]} walks the city with you, booked per day.
-              </p>
-              <Button
-                data-testid="book-in-person-btn"
-                onClick={() => handleBook("in_person")}
-                className="mt-4 w-full h-11 bg-green-800 text-white hover:bg-green-900 hover:text-white"
+          ) : (
+            services.map((s) => (
+              <Link
+                key={s.id}
+                to={`/services/${s.id}`}
+                data-testid={`service-link-${s.id}`}
+                className="block rounded-2xl border-2 border-stone-200 bg-white p-5 hover:border-green-700 transition-colors"
               >
-                Book in-person
-              </Button>
-            </div>
+                <div className="text-xs font-medium text-stone-500">{CATEGORY_LABELS[s.category] || s.category}</div>
+                <div className="mt-1 font-heading text-base font-semibold text-stone-900">{s.title}</div>
+                <div className="mt-2 flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-1 text-stone-500"><Clock className="h-3.5 w-3.5" /> {s.duration_hours}h</span>
+                  <span className="font-heading font-bold text-stone-900">{inr(s.price)}</span>
+                </div>
+              </Link>
+            ))
           )}
           <ul className="rounded-xl border border-stone-200 bg-stone-50 p-4 space-y-2 text-xs text-stone-600">
-            <li>✓ Payment held until itinerary received</li>
+            <li>✓ Payment held until you confirm the meetup happened</li>
             <li>✓ Dispute resolution within 24 hours</li>
             <li>✓ 90% of every booking goes to your local</li>
           </ul>
