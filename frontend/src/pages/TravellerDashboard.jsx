@@ -80,14 +80,15 @@ export default function TravellerDashboard() {
                               <div className="font-heading text-lg font-semibold text-stone-900">{b.guide_name}</div>
                               <Badge variant="outline" className={meta.className}>{meta.text}</Badge>
                             </div>
+                            <div className="text-sm text-stone-700 mt-1">{b.service_title}</div>
                             <div className="flex items-center gap-4 mt-2 text-sm text-stone-500">
                               <span className="flex items-center gap-1">
                                 <MapPin className="h-3.5 w-3.5" /> {b.guide_city}
                               </span>
                               <span className="flex items-center gap-1">
-                                <CalendarIcon className="h-3.5 w-3.5" /> {b.trip_start} → {b.trip_end}
+                                <CalendarIcon className="h-3.5 w-3.5" /> {b.booking_date} · {b.booking_time}
                               </span>
-                              <span>{b.package_type === "chat" ? "Chat-only" : `In-person · ${b.days} day${b.days > 1 ? "s" : ""}`}</span>
+                              <span>{b.duration_hours}h in person</span>
                             </div>
                           </div>
                           <div className="text-right">
@@ -127,14 +128,15 @@ export default function TravellerDashboard() {
                               <div className="font-heading text-lg font-semibold text-stone-900">{b.guide_name}</div>
                               <Badge variant="outline" className={meta.className}>{meta.text}</Badge>
                             </div>
+                            <div className="text-sm text-stone-700 mt-1">{b.service_title}</div>
                             <div className="flex items-center gap-4 mt-2 text-sm text-stone-500">
                               <span className="flex items-center gap-1">
                                 <MapPin className="h-3.5 w-3.5" /> {b.guide_city}
                               </span>
                               <span className="flex items-center gap-1">
-                                <CalendarIcon className="h-3.5 w-3.5" /> {b.trip_start}
+                                <CalendarIcon className="h-3.5 w-3.5" /> {b.booking_date}
                               </span>
-                              <span>{b.package_type === "chat" ? "Chat-only" : `In-person · ${b.days} day${b.days > 1 ? "s" : ""}`}</span>
+                              <span>{b.duration_hours}h in person</span>
                             </div>
                           </div>
                           <div className="font-heading text-xl font-bold text-stone-900">{inr(b.amount)}</div>
