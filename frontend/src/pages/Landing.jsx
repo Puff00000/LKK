@@ -13,14 +13,14 @@ const steps = [
   },
   {
     icon: Sparkles,
-    title: "Book a package",
-    body: "Choose your dates and pay securely. Chat-only insights from ₹199 — in-person guidance from ₹499 a day.",
+    title: "Book a service",
+    body: "Pick a bite-sized experience — 2 to 8 hours, in person. Starts at ₹499 for 2 hours, scaling with duration.",
     accent: "bg-green-50 text-green-800 ring-green-200",
   },
   {
     icon: MessageCircle,
-    title: "Get a real itinerary",
-    body: "Your local crafts a custom day-by-day plan, chats with you in-app, and can meet you in person.",
+    title: "Meet in person",
+    body: "Chat with your local to confirm the meeting point, then do the experience together — no written itinerary needed.",
     accent: "bg-rose-50 text-rose-800 ring-rose-200",
   },
 ];
@@ -89,8 +89,8 @@ export default function Landing() {
 
               <p className="mt-6 max-w-xl text-base sm:text-lg text-stone-600 leading-relaxed">
                 <span className="font-display text-stone-900">LKK</span> connects you with verified people who live in
-                your destination city. Get insider tips by chat from <span className="font-semibold text-stone-900">₹199</span>,
-                or book them in-person for the day from <span className="font-semibold text-stone-900">₹499</span>.
+                your destination city, for bite-sized in-person experiences — bargaining a market, a street food
+                crawl, chasing the sunrise. 2 to 8 hours, from <span className="font-semibold text-stone-900">₹499</span>.
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
@@ -129,7 +129,7 @@ export default function Landing() {
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="kicker-saffron">Today in Jaipur</div>
-                      <div className="font-heading text-2xl font-bold text-stone-900">A day with Aarav</div>
+                      <div className="font-heading text-2xl font-bold text-stone-900">Street food walk with Aarav</div>
                     </div>
                     <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-800 text-white font-display">
                       AS
@@ -138,20 +138,19 @@ export default function Landing() {
                   <div className="divider-mandala mt-4" />
                   <ul className="mt-4 space-y-4">
                     {[
-                      { t: "7:00 AM", v: "Sunrise chai at Nahargarh fort" },
-                      { t: "10:30 AM", v: "Hidden haveli walk in old city" },
-                      { t: "1:00 PM", v: "Laal maas at a 60-year-old dhaba" },
-                      { t: "5:30 PM", v: "Rooftop bazaar with a poet friend" },
+                      { t: "🍜 Food & Drink", v: "10 iconic spots in the Old City" },
+                      { t: "🕐 3 hours", v: "6:30 PM meetup at Hawa Mahal" },
+                      { t: "💳 ₹749", v: "Covers Aarav's time only" },
                     ].map((row) => (
                       <li key={row.t} className="flex gap-4">
-                        <span className="w-20 shrink-0 text-xs font-medium text-amber-700">{row.t}</span>
+                        <span className="w-32 shrink-0 text-xs font-medium text-amber-700">{row.t}</span>
                         <span className="text-sm text-stone-700">{row.v}</span>
                       </li>
                     ))}
                   </ul>
                   <div className="mt-6 flex items-center justify-between rounded-xl bg-green-50 px-4 py-3 text-sm border border-green-100">
-                    <span className="text-green-900">In-person · 1 day</span>
-                    <span className="font-heading text-lg font-bold text-green-900">₹499</span>
+                    <span className="text-green-900">In-person · 3 hours</span>
+                    <span className="font-heading text-lg font-bold text-green-900">₹749</span>
                   </div>
                 </div>
               </div>
@@ -211,59 +210,44 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PRICING — TWO TIERS */}
+      {/* PRICING — DURATION BASED */}
       <section id="pricing" className="bg-stone-50 border-y border-stone-200">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-20 sm:py-28">
           <div className="max-w-2xl">
-            <div className="kicker-saffron">Pricing — pick how close you want them</div>
+            <div className="kicker-saffron">Pricing — simple and duration-based</div>
             <h2 className="mt-3 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">
-              Two simple ways to travel with a local.
+              One rule: ₹499 for 2 hours, ₹250 per extra hour.
             </h2>
             <p className="mt-4 text-stone-600 leading-relaxed">
-              Start with a few tips by chat. Upgrade to having them with you in person — only when you both agree.
-              LKK takes a 10% platform fee. That's it — no surge pricing, no booking fees.
+              Every service is in person, 2 to 8 hours. The fee covers your local's time only — food, entry fees,
+              shopping, and transport are separate and shown upfront on each listing. LKK takes a 10% platform fee.
+              That's it — no surge pricing, no booking fees.
             </p>
           </div>
 
-          <div className="mt-12 grid gap-6 md:grid-cols-2">
-            <div data-testid="tier-chat" className="rounded-2xl border-2 border-amber-300 bg-white p-8">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-amber-700">
-                <MessageCircle className="h-4 w-4" /> Chat-only insider
+          <div className="mt-12 grid gap-3 sm:grid-cols-4 lg:grid-cols-7">
+            {[
+              { h: 2, p: 499 }, { h: 3, p: 749 }, { h: 4, p: 999 }, { h: 5, p: 1249 },
+              { h: 6, p: 1499 }, { h: 7, p: 1749 }, { h: 8, p: 1999 },
+            ].map((row) => (
+              <div key={row.h} className="rounded-xl border-2 border-stone-200 bg-white p-4 text-center hover:border-green-700 transition-colors">
+                <div className="text-xs uppercase tracking-[0.15em] text-stone-500">{row.h} hours</div>
+                <div className="mt-2 font-heading text-2xl font-bold text-stone-900">₹{row.p.toLocaleString("en-IN")}</div>
               </div>
-              <div className="mt-5 flex items-baseline gap-1 font-heading">
-                <span className="text-5xl font-bold text-stone-900">₹199</span>
-                <span className="text-sm text-stone-500">/ one-time</span>
-              </div>
-              <p className="mt-3 text-sm text-stone-600 leading-relaxed">
-                Your local sends you a custom itinerary and answers questions on chat throughout your trip. Perfect if
-                you want to explore solo but with insider tips in your pocket.
-              </p>
-              <ul className="mt-6 space-y-2 text-sm text-stone-700">
-                <li>✓ Custom day-by-day itinerary in writing</li>
-                <li>✓ In-app chat support before & during trip</li>
-                <li>✓ Restaurant, café & hidden-spot recommendations</li>
-              </ul>
-            </div>
+            ))}
+          </div>
 
-            <div data-testid="tier-in-person" className="rounded-2xl border-2 border-green-700 bg-white p-8 relative overflow-hidden">
-              <span className="absolute right-4 top-4 chip-saffron">Most asked for</span>
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-green-800">
-                <Sparkles className="h-4 w-4" /> In-person, with you
+          <div className="mt-8 grid gap-6 md:grid-cols-3">
+            {[
+              { icon: MessageCircle, label: "🍜 Food & Drink", body: "Street food walks, chai trails, local restaurant tours." },
+              { icon: Sparkles, label: "🛍️ Shopping", body: "Bazaar bargaining, textile shopping, spice markets." },
+              { icon: ShieldCheck, label: "🏛️ Culture & more", body: "Heritage walks, photography, craft workshops, nature." },
+            ].map((c) => (
+              <div key={c.label} className="rounded-2xl border border-stone-200 bg-white p-6">
+                <div className="font-heading text-base font-semibold text-stone-900">{c.label}</div>
+                <p className="mt-2 text-sm text-stone-600 leading-relaxed">{c.body}</p>
               </div>
-              <div className="mt-5 flex items-baseline gap-1 font-heading">
-                <span className="text-5xl font-bold text-stone-900">₹499</span>
-                <span className="text-sm text-stone-500">/ per day</span>
-              </div>
-              <p className="mt-3 text-sm text-stone-600 leading-relaxed">
-                Everything in chat-only — plus your local actually walks the city with you. Booked per day, only when
-                both you and your local agree on the meet-up plan.
-              </p>
-              <ul className="mt-6 space-y-2 text-sm text-stone-700">
-                <li>✓ Full in-person guidance during your trip</li>
-                <li>✓ Local takes you to spots no tour goes</li>
-                <li>✓ Mutually agreed dates — both sides confirm</li>
-              </ul>
-            </div>
+            ))}
           </div>
         </div>
       </section>
@@ -277,14 +261,14 @@ export default function Landing() {
               You're safe because your money is.
             </h2>
             <p className="mt-4 text-stone-600 leading-relaxed">
-              Every booking is held in escrow. Your local gets paid only after you confirm you've received your
-              itinerary. If anything feels off, raise a dispute and our team reviews it within 24 hours.
+              Every booking is held in escrow. Your local gets paid only after you confirm the experience happened.
+              If anything feels off, raise a dispute and our team reviews it within 24 hours.
             </p>
           </div>
           <ul className="grid gap-4">
             {[
               "10% platform fee · 90% goes to the local",
-              "Payment held until you confirm itinerary received",
+              "Payment held until you confirm the experience happened",
               "Verified profile + reviews from real travellers",
               "Dispute resolution within 24 hours",
             ].map((t, i) => (
