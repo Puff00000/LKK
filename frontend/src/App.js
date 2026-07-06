@@ -7,6 +7,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Landing from "@/pages/Landing";
 import Browse from "@/pages/Browse";
 import GuideProfile from "@/pages/GuideProfile";
+import ServiceDetail from "@/pages/ServiceDetail";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import BookingFlow from "@/pages/BookingFlow";
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/browse" element={<Browse />} />
             <Route path="/guides/:id" element={<GuideProfile />} />
+            <Route path="/services/:id" element={<ServiceDetail />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
