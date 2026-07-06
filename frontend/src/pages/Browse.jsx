@@ -1,19 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
-import GuideCard from "@/components/GuideCard";
-import { Input } from "@/components/ui/input";
+import ServiceCard from "@/components/ServiceCard";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { MapPin, Sparkles } from "lucide-react";
 
+const CATEGORIES = [
+  { value: "any", label: "All categories" },
+  { value: "food", label: "🍜 Food & Drink" },
+  { value: "shopping", label: "🛍️ Shopping" },
+  { value: "culture", label: "🏛️ Culture & Heritage" },
+  { value: "photography", label: "📸 Photography" },
+  { value: "experience", label: "🎨 Experience" },
+  { value: "nature", label: "🌿 Nature" },
+];
+
 export default function Browse() {
   const [params, setParams] = useSearchParams();
-  const [guides, setGuides] = useState([]);
+  const [services, setServices] = useState([]);
   const [cities, setCities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [serviceSearch, setServiceSearch] = useState("");
+  const [keyword, setKeyword] = useState("");
   const [citySearch, setCitySearch] = useState(params.get("city") || "");
-  const sort = params.get("sort") || "rating";
+  const category = params.get("category") || "any";
+  const sort = params.get("sort") || "newest";
 
   useEffect(() => {
     api.get("/guides/cities").then(({ data }) => setCities(data));
@@ -21,33 +31,26 @@ export default function Browse() {
 
   useEffect(() => {
     setLoading(true);
-    const query = {};
-    if (sort) query.sort = sort;
-    query.min_price = 199;
-    query.max_price = 9999;
-    api.get("/guides", { params: query }).then(({ data }) => {
-      setGuides(data);
+    const query = { sort };
+    if (citySearch.trim()) query.city = citySearch.trim();
+    if (category !== "any") query.category = category;
+    api.get("/services", { params: query }).then(({ data }) => {
+      setServices(data);
       setLoading(false);
     });
-  }, [sort]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sort, category, citySearch]);
 
   const filtered = useMemo(() => {
-    let result = guides;
-    if (citySearch.trim()) {
-      const q = citySearch.toLowerCase();
-      result = result.filter((g) => g.city.toLowerCase().includes(q));
-    }
-    if (serviceSearch.trim()) {
-      const q = serviceSearch.toLowerCase();
-      result = result.filter(
-        (g) =>
-          g.name.toLowerCase().includes(q) ||
-          g.bio.toLowerCase().includes(q) ||
-          (g.specialities || []).some((s) => s.toLowerCase().includes(q))
-      );
-    }
-    return result;
-  }, [guides, serviceSearch, citySearch]);
+    if (!keyword.trim()) return services;
+    const q = keyword.toLowerCase();
+    return services.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.guide_name.toLowerCase().includes(q)
+    );
+  }, [services, keyword]);
 
   const update = (key, value) => {
     const next = new URLSearchParams(params);
@@ -62,10 +65,10 @@ export default function Browse() {
       <div className="text-center">
         <div className="text-xs uppercase tracking-[0.2em] text-green-800">Browse</div>
         <h1 className="mt-2 font-heading text-4xl sm:text-5xl font-bold tracking-tight text-stone-900">
-          Find your local
+          Find a bite-sized experience
         </h1>
         <p className="mt-3 text-stone-500 text-base max-w-xl mx-auto">
-          Search by what you want to do — food trails, heritage walks, café crawls — and the city you're heading to.
+          Bargain a market, walk a street food trail, chase the sunrise — book 2 to 8 hours with a real local, in person.
         </p>
       </div>
 
@@ -77,9 +80,9 @@ export default function Browse() {
             <div className="text-xs uppercase tracking-[0.15em] text-stone-400 font-medium">Service</div>
             <input
               data-testid="browse-search-service"
-              value={serviceSearch}
-              onChange={(e) => setServiceSearch(e.target.value)}
-              placeholder="e.g. Food trail, Heritage walk..."
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="e.g. Street food, bargaining, sunrise…"
               className="w-full mt-0.5 text-sm text-stone-900 placeholder:text-stone-400 bg-transparent outline-none"
             />
           </div>
@@ -93,8 +96,12 @@ export default function Browse() {
               value={citySearch}
               onChange={(e) => setCitySearch(e.target.value)}
               placeholder="e.g. Jaipur, Goa..."
+              list="browse-cities"
               className="w-full mt-0.5 text-sm text-stone-900 placeholder:text-stone-400 bg-transparent outline-none"
             />
+            <datalist id="browse-cities">
+              {cities.map((c) => <option key={c} value={c} />)}
+            </datalist>
           </div>
         </div>
         <div className="flex items-center justify-center px-5 py-4">
@@ -106,19 +113,39 @@ export default function Browse() {
         </div>
       </div>
 
+      {/* Category chips */}
+      <div className="mt-5 flex flex-wrap gap-2">
+        {CATEGORIES.map((c) => (
+          <button
+            key={c.value}
+            type="button"
+            data-testid={`category-chip-${c.value}`}
+            onClick={() => update("category", c.value)}
+            className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+              category === c.value
+                ? "border-green-800 bg-green-800 text-white"
+                : "border-stone-200 bg-white text-stone-600 hover:border-green-300"
+            }`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
       {/* Results header */}
-      <div className="mt-8 flex items-center justify-between">
+      <div className="mt-6 flex items-center justify-between">
         <div className="text-sm text-stone-500">
-          {loading ? "Loading…" : `${filtered.length} local${filtered.length !== 1 ? "s" : ""} found`}
+          {loading ? "Loading…" : `${filtered.length} experience${filtered.length !== 1 ? "s" : ""} found`}
         </div>
         <div className="flex items-center gap-2 text-sm text-stone-500">
           <span>SORT</span>
           <Select value={sort} onValueChange={(v) => update("sort", v)}>
-            <SelectTrigger data-testid="filter-sort" className="h-9 border-stone-200 text-stone-700 w-36">
+            <SelectTrigger data-testid="filter-sort" className="h-9 border-stone-200 text-stone-700 w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="rating">Top rated</SelectItem>
+              <SelectItem value="newest">Newest</SelectItem>
+              <SelectItem value="rating">Top rated local</SelectItem>
               <SelectItem value="price_low">Price: low to high</SelectItem>
               <SelectItem value="price_high">Price: high to low</SelectItem>
             </SelectContent>
@@ -134,12 +161,12 @@ export default function Browse() {
           </div>
         ) : filtered.length === 0 ? (
           <div data-testid="browse-empty" className="rounded-2xl border border-dashed border-stone-300 p-12 text-center text-stone-500">
-            No locals match your search yet. Try different keywords or city.
+            No experiences match your search yet. Try a different keyword, city, or category.
           </div>
         ) : (
-          <div data-testid="browse-grid" className="grid gap-5 sm:grid-cols-2 lg:grid-cols-2">
-            {filtered.map((g) => (
-              <GuideCard key={g.id} guide={g} />
+          <div data-testid="browse-grid" className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {filtered.map((s) => (
+              <ServiceCard key={s.id} service={s} />
             ))}
           </div>
         )}
