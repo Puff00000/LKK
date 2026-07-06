@@ -1012,8 +1012,8 @@ async def confirm_itinerary(booking_id: str, user: dict = Depends(require_role("
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] != "itinerary_delivered":
-            raise HTTPException(status_code=400, detail="No itinerary to confirm yet")
+        if booking["status"] not in ("accepted", "itinerary_delivered"):
+            raise HTTPException(status_code=400, detail="Booking must be accepted before you can confirm the experience happened")
         await conn.execute(
             "UPDATE bookings SET status='completed', payment_released=TRUE, completed_at=$1 WHERE id=$2",
             datetime.now(timezone.utc), booking_id
