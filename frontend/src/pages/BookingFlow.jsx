@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { api, formatApiError, inr } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,63 +7,51 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { CalendarIcon, ShieldCheck, Lock, MessageCircle, Sparkles, Minus, Plus } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { CalendarIcon, ShieldCheck, Lock, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
-const PRICE_CHAT = 199;
-const PRICE_IN_PERSON_PER_DAY = 499;
+const TIME_SLOTS = [
+  "6:00 AM", "7:00 AM", "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM",
+  "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM",
+];
 
 export default function BookingFlow() {
-  const { id } = useParams();
+  const { id } = useParams(); // service id
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const initialTier = searchParams.get("tier") === "in_person" ? "in_person" : "chat";
-  const [guide, setGuide] = useState(null);
+  const [service, setService] = useState(null);
   const [step, setStep] = useState(1);
-  const [tier, setTier] = useState(initialTier);
-  const [days, setDays] = useState(1);
-  const [tripStart, setTripStart] = useState(null);
-  const [tripEnd, setTripEnd] = useState(null);
+  const [bookingDate, setBookingDate] = useState(null);
+  const [bookingTime, setBookingTime] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [booking, setBooking] = useState(null);
 
   useEffect(() => {
-    api.get(`/guides/${id}`).then(({ data }) => {
-      setGuide(data.guide);
-      // if URL asked for in_person but guide doesn't offer it, fall back to chat
-      if (initialTier === "in_person" && data.guide.offers_in_person !== true) setTier("chat");
-      if (initialTier === "chat" && data.guide.offers_chat === false && data.guide.offers_in_person) setTier("in_person");
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    api.get(`/services/${id}`).then(({ data }) => setService(data));
   }, [id]);
 
-  if (!guide) return <div className="py-20 text-center text-stone-500" data-testid="booking-loading">Loading…</div>;
+  if (!service) return <div className="py-20 text-center text-stone-500" data-testid="booking-loading">Loading…</div>;
 
-  const amount = tier === "chat" ? PRICE_CHAT : PRICE_IN_PERSON_PER_DAY * days;
+  const amount = service.price;
   const fee = Math.round((amount * 10) / 100);
   const localGets = amount - fee;
 
-  const offersChat = guide.offers_chat !== false;
-  const offersInPerson = guide.offers_in_person === true;
-
   const goPayment = async () => {
-    if (!tripStart || !tripEnd || !phone) {
-      toast.error("Please fill all trip details.");
+    if (!bookingDate || !bookingTime || !phone) {
+      toast.error("Please pick a date, time, and add your phone number.");
       return;
     }
     setSubmitting(true);
     try {
       const { data } = await api.post("/bookings", {
-        guide_id: guide.id,
-        trip_start: format(tripStart, "yyyy-MM-dd"),
-        trip_end: format(tripEnd, "yyyy-MM-dd"),
+        service_id: service.id,
+        booking_date: format(bookingDate, "yyyy-MM-dd"),
+        booking_time: bookingTime,
         traveller_phone: phone,
         notes,
-        package_type: tier,
-        days: tier === "in_person" ? days : 1,
       });
       setBooking(data);
       setStep(2);
@@ -91,7 +79,7 @@ export default function BookingFlow() {
     <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-10" data-testid="booking-flow">
       <div className="text-xs uppercase tracking-[0.2em] text-green-800">Booking</div>
       <h1 className="mt-2 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">
-        Book a day with {guide.name.split(" ")[0]}
+        Book "{service.title}"
       </h1>
 
       <ol className="mt-6 flex items-center gap-4 text-sm">
@@ -114,109 +102,45 @@ export default function BookingFlow() {
         <div className="space-y-6">
           {step === 1 ? (
             <div className="rounded-2xl border border-stone-200 bg-white p-6 space-y-5">
-              {/* TIER PICKER */}
-              <div>
-                <Label>Choose your package</Label>
-                <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                  {offersChat && (
-                    <button
-                      type="button"
-                      data-testid="tier-pick-chat"
-                      onClick={() => setTier("chat")}
-                      className={`text-left rounded-xl border-2 p-4 transition-colors ${
-                        tier === "chat" ? "border-amber-500 bg-amber-50" : "border-stone-200 bg-white hover:border-amber-200"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
-                        <MessageCircle className="h-4 w-4" /> Chat-only
-                      </div>
-                      <div className="mt-2 font-heading text-xl font-bold text-stone-900">{inr(PRICE_CHAT)}<span className="text-xs font-normal text-stone-500"> one-time</span></div>
-                    </button>
-                  )}
-                  {offersInPerson && (
-                    <button
-                      type="button"
-                      data-testid="tier-pick-in-person"
-                      onClick={() => setTier("in_person")}
-                      className={`text-left rounded-xl border-2 p-4 transition-colors ${
-                        tier === "in_person" ? "border-green-700 bg-green-50" : "border-stone-200 bg-white hover:border-green-200"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
-                        <Sparkles className="h-4 w-4" /> In-person
-                      </div>
-                      <div className="mt-2 font-heading text-xl font-bold text-stone-900">{inr(PRICE_IN_PERSON_PER_DAY)}<span className="text-xs font-normal text-stone-500"> / day</span></div>
-                    </button>
-                  )}
+              <div className="rounded-xl bg-green-50 border border-green-100 p-4 text-sm">
+                <div className="font-heading text-base font-semibold text-stone-900">{service.title}</div>
+                <div className="mt-1 flex items-center gap-3 text-stone-600">
+                  <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {service.duration_hours} hours</span>
+                  <span className="font-medium text-stone-900">{inr(amount)}</span>
                 </div>
               </div>
 
-              {tier === "in_person" && (
-                <div>
-                  <Label>Number of days with you in person</Label>
-                  <div className="mt-2 flex items-center gap-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      data-testid="days-minus"
-                      onClick={() => setDays((d) => Math.max(1, d - 1))}
-                      className="h-10 w-10 border-stone-300"
-                    >
-                      <Minus className="h-4 w-4" />
-                    </Button>
-                    <div data-testid="days-count" className="font-heading text-2xl font-bold text-stone-900 w-12 text-center">{days}</div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      data-testid="days-plus"
-                      onClick={() => setDays((d) => Math.min(30, d + 1))}
-                      className="h-10 w-10 border-stone-300"
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                    <div className="text-sm text-stone-500">× ₹{PRICE_IN_PERSON_PER_DAY} = <span className="font-medium text-stone-900">{inr(amount)}</span></div>
-                  </div>
-                </div>
-              )}
-
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label>Trip start</Label>
+                  <Label>Meetup date</Label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
-                        data-testid="trip-start-btn"
+                        data-testid="booking-date-btn"
                         className="mt-1.5 w-full justify-start font-normal border-stone-200"
                       >
                         <CalendarIcon className="mr-2 h-4 w-4 text-stone-500" />
-                        {tripStart ? format(tripStart, "PPP") : "Pick a date"}
+                        {bookingDate ? format(bookingDate, "PPP") : "Pick a date"}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="p-0 w-auto" align="start">
-                      <Calendar mode="single" selected={tripStart} onSelect={setTripStart} disabled={(d) => d < new Date(new Date().setHours(0,0,0,0))} />
+                      <Calendar mode="single" selected={bookingDate} onSelect={setBookingDate} disabled={(d) => d < new Date(new Date().setHours(0,0,0,0))} />
                     </PopoverContent>
                   </Popover>
                 </div>
                 <div>
-                  <Label>Trip end</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        data-testid="trip-end-btn"
-                        className="mt-1.5 w-full justify-start font-normal border-stone-200"
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-stone-500" />
-                        {tripEnd ? format(tripEnd, "PPP") : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="p-0 w-auto" align="start">
-                      <Calendar mode="single" selected={tripEnd} onSelect={setTripEnd} disabled={(d) => !tripStart || d < tripStart} />
-                    </PopoverContent>
-                  </Popover>
+                  <Label>Meetup time</Label>
+                  <Select value={bookingTime} onValueChange={setBookingTime}>
+                    <SelectTrigger data-testid="booking-time-select" className="mt-1.5 border-stone-200">
+                      <SelectValue placeholder="Pick a time" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TIME_SLOTS.map((t) => (
+                        <SelectItem key={t} value={t}>{t}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -227,7 +151,7 @@ export default function BookingFlow() {
 
               <div>
                 <Label>Notes for your local <span className="text-stone-400 font-normal">(optional)</span></Label>
-                <Textarea data-testid="trip-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Tell them what you love — food, art, off-beat places…" className="mt-1.5" rows={4} />
+                <Textarea data-testid="trip-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Meeting point preference, dietary notes, anything they should know…" className="mt-1.5" rows={4} />
               </div>
 
               <Button data-testid="booking-continue" onClick={goPayment} disabled={submitting} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
@@ -240,15 +164,15 @@ export default function BookingFlow() {
                 <div className="flex items-center gap-2 font-medium"><Lock className="h-4 w-4" /> Mock Razorpay (test mode)</div>
                 <p className="mt-1 text-green-900/80">
                   Payment is simulated for the MVP. In production, this calls Razorpay's order + checkout flow. Your
-                  money is held in escrow until you confirm your itinerary.
+                  money is held in escrow until you confirm the meetup happened.
                 </p>
               </div>
 
               <div className="grid gap-3 rounded-xl border border-stone-200 p-4 text-sm">
-                <div className="flex justify-between"><span className="text-stone-500">{booking?.package_type === "in_person" ? `In-person · ${booking.days} day${booking.days > 1 ? "s" : ""}` : "Chat-only"}</span><span className="text-stone-900">{inr(booking?.amount || amount)}</span></div>
+                <div className="flex justify-between"><span className="text-stone-500">{booking?.service_title || service.title} · {service.duration_hours}h</span><span className="text-stone-900">{inr(booking?.amount || amount)}</span></div>
                 <div className="flex justify-between"><span className="text-stone-500">LKK platform fee (10%)</span><span className="text-stone-900">{inr(booking?.platform_fee || fee)}</span></div>
                 <div className="flex justify-between border-t border-stone-100 pt-3 font-heading text-base font-semibold"><span>Total</span><span>{inr(booking?.amount || amount)}</span></div>
-                <div className="text-xs text-stone-500">Your local receives {inr(booking?.local_payout || localGets)} after you confirm the itinerary.</div>
+                <div className="text-xs text-stone-500">Your local receives {inr(booking?.local_payout || localGets)} after you confirm the meetup happened.</div>
               </div>
 
               <Button data-testid="pay-now-btn" onClick={mockPay} disabled={submitting} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
@@ -262,20 +186,20 @@ export default function BookingFlow() {
           <div className="text-xs uppercase tracking-[0.2em] text-stone-500">Your local</div>
           <div className="mt-3 flex items-center gap-3">
             <div className="h-12 w-12 overflow-hidden rounded-full bg-green-50">
-              {guide.avatar_url && <img src={guide.avatar_url.startsWith("http") ? guide.avatar_url : `${process.env.REACT_APP_BACKEND_URL}${guide.avatar_url}`} alt="" className="h-full w-full object-cover" />}
+              {service.guide_avatar_url && <img src={service.guide_avatar_url.startsWith("http") ? service.guide_avatar_url : `${process.env.REACT_APP_BACKEND_URL}${service.guide_avatar_url}`} alt="" className="h-full w-full object-cover" />}
             </div>
             <div>
-              <div className="font-heading text-base font-semibold text-stone-900">{guide.name}</div>
-              <div className="text-xs text-stone-500">{guide.city}</div>
+              <div className="font-heading text-base font-semibold text-stone-900">{service.guide_name}</div>
+              <div className="text-xs text-stone-500">{service.guide_city}</div>
             </div>
           </div>
           <div className="mt-5 rounded-lg bg-stone-50 p-3 text-sm text-stone-700">
-            <div className="text-xs text-stone-500 uppercase tracking-wide">{tier === "chat" ? "Chat-only" : `In-person · ${days} day${days > 1 ? "s" : ""}`}</div>
+            <div className="text-xs text-stone-500 uppercase tracking-wide">{service.title} · {service.duration_hours}h</div>
             <div className="mt-1 font-heading text-2xl font-bold text-stone-900">{inr(amount)}</div>
           </div>
           <ul className="mt-4 space-y-2 text-xs text-stone-500">
             <li className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-green-700" /> Held in escrow</li>
-            <li className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-green-700" /> Refundable if no itinerary</li>
+            <li className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-green-700" /> Refundable if the meetup falls through</li>
           </ul>
         </aside>
       </div>
