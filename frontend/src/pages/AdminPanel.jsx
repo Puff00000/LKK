@@ -3,7 +3,7 @@ import { api, inr } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldCheck, ShieldAlert, Search, RefreshCw } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_COLORS = {
@@ -27,6 +27,9 @@ export default function AdminPanel() {
   const [bookings, setBookings] = useState([]);
   const [users, setUsers] = useState([]);
   const [disputes, setDisputes] = useState([]);
+  const [videos, setVideos] = useState([]);
+  const [videoFilter, setVideoFilter] = useState("pending");
+  const [rejectReasons, setRejectReasons] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -35,16 +38,18 @@ export default function AdminPanel() {
   const load = async () => {
     setLoading(true);
     try {
-      const [s, b, u, d] = await Promise.all([
+      const [s, b, u, d, v] = await Promise.all([
         api.get("/admin/stats"),
         api.get("/admin/bookings"),
         api.get("/admin/users"),
         api.get("/admin/disputes"),
+        api.get("/admin/videos"),
       ]);
       setStats(s.data);
       setBookings(b.data);
       setUsers(u.data);
       setDisputes(d.data);
+      setVideos(v.data);
     } catch (e) {
       toast.error("Failed to load admin data");
     } finally {
@@ -79,6 +84,27 @@ export default function AdminPanel() {
       setActing(null);
     }
   };
+
+  const handleVideoReview = async (guideId, approved) => {
+    const reason = rejectReasons[guideId]?.trim();
+    if (!approved && !reason) {
+      toast.error("Add a reason before rejecting");
+      return;
+    }
+    setActing(guideId);
+    try {
+      await api.post(`/admin/guides/${guideId}/video/review`, { approved, reason: approved ? null : reason });
+      toast.success(approved ? "Video approved — now live" : "Video rejected");
+      setRejectReasons((r) => ({ ...r, [guideId]: "" }));
+      load();
+    } catch (e) {
+      toast.error("Failed to review video");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const filteredVideos = videos.filter((g) => videoFilter === "all" || g.video_status === videoFilter);
 
   const filteredBookings = bookings.filter((b) => {
     if (statusFilter !== "all" && b.status !== statusFilter) return false;
@@ -156,7 +182,7 @@ export default function AdminPanel() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="font-medium text-stone-900">{b.traveller_name} → {b.guide_name}</div>
-                    <div className="text-sm text-stone-500 mt-1">{b.trip_start} · {inr(b.amount)} · {b.package_type}</div>
+                    <div className="text-sm text-stone-500 mt-1">{b.service_title} · {b.booking_date} · {inr(b.amount)}</div>
                     {b.dispute_reason && (
                       <div className="mt-2 text-sm text-red-800 bg-white rounded-lg px-3 py-2 border border-red-100">
                         "{b.dispute_reason}"
@@ -186,6 +212,108 @@ export default function AdminPanel() {
           </ul>
         </div>
       )}
+
+      {/* Video moderation */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <h2 className="font-heading text-xl font-bold text-stone-900">
+            Intro videos ({filteredVideos.length})
+          </h2>
+          <select
+            value={videoFilter}
+            onChange={(e) => setVideoFilter(e.target.value)}
+            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700"
+            data-testid="video-filter-select"
+          >
+            <option value="pending">Pending review</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+
+        {loading ? (
+          <div className="mt-4 text-stone-500">Loading…</div>
+        ) : filteredVideos.length === 0 ? (
+          <div className="mt-4 text-stone-500">No videos in this filter.</div>
+        ) : (
+          <div className="mt-4 space-y-4">
+            {filteredVideos.map((g) => (
+              <div key={g.id} className="rounded-2xl border border-stone-200 bg-white p-5" data-testid={`video-row-${g.id}`}>
+                <div className="flex flex-wrap items-start gap-4">
+                  <div className="h-24 w-40 overflow-hidden rounded-xl bg-stone-100 ring-1 ring-stone-200 shrink-0">
+                    <video src={g.video_url} className="h-full w-full object-cover" muted controls />
+                  </div>
+                  <div className="flex-1 min-w-[200px]">
+                    <div className="flex items-center gap-2">
+                      <div className="font-medium text-stone-900">{g.name}</div>
+                      <span className="text-xs text-stone-400">{g.city}</span>
+                      {g.video_status === "approved" && (
+                        <Badge className="bg-green-800 text-white hover:bg-green-800 gap-1">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Approved
+                        </Badge>
+                      )}
+                      {g.video_status === "pending" && (
+                        <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
+                          <Clock className="h-3.5 w-3.5" /> Pending
+                        </Badge>
+                      )}
+                      {g.video_status === "rejected" && (
+                        <Badge variant="outline" className="border-red-300 bg-red-50 text-red-800 gap-1">
+                          <XCircle className="h-3.5 w-3.5" /> Rejected
+                        </Badge>
+                      )}
+                    </div>
+                    {g.video_status === "rejected" && g.video_rejection_reason && (
+                      <div className="mt-2 text-xs text-red-700">Reason: {g.video_rejection_reason}</div>
+                    )}
+                    {g.video_status !== "approved" && (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Button
+                          onClick={() => handleVideoReview(g.id, true)}
+                          disabled={acting === g.id}
+                          className="bg-green-800 text-white hover:bg-green-900 h-9 text-xs"
+                          data-testid={`approve-video-${g.id}`}
+                        >
+                          Approve
+                        </Button>
+                        <Input
+                          value={rejectReasons[g.id] || ""}
+                          onChange={(e) => setRejectReasons((r) => ({ ...r, [g.id]: e.target.value }))}
+                          placeholder="Reason for rejection"
+                          className="h-9 text-xs w-56"
+                          data-testid={`reject-reason-${g.id}`}
+                        />
+                        <Button
+                          onClick={() => handleVideoReview(g.id, false)}
+                          disabled={acting === g.id}
+                          variant="outline"
+                          className="border-red-300 text-red-700 hover:bg-red-50 h-9 text-xs"
+                          data-testid={`reject-video-${g.id}`}
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                    {g.video_status === "approved" && (
+                      <div className="mt-3">
+                        <Button
+                          onClick={() => handleVideoReview(g.id, false)}
+                          disabled={acting === g.id}
+                          variant="outline"
+                          className="border-red-300 text-red-700 hover:bg-red-50 h-9 text-xs"
+                        >
+                          Revoke (needs a reason above)
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* All bookings */}
       <div className="mt-10">
@@ -218,7 +346,7 @@ export default function AdminPanel() {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 border-b border-stone-200">
                 <tr>
-                  {["Booking", "Traveller", "Local", "Mode", "Start", "Amount", "Fee", "Status"].map((h) => (
+                  {["Booking", "Traveller", "Local", "Service", "Meetup", "Amount", "Fee", "Status"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-stone-500 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -235,9 +363,10 @@ export default function AdminPanel() {
                       <div className="text-xs text-stone-400">{b.guide_city}</div>
                     </td>
                     <td className="px-4 py-3 text-stone-600">
-                      {b.package_type === "chat" ? "Chat" : `${b.days}d in-person`}
+                      <div>{b.service_title}</div>
+                      <div className="text-xs text-stone-400">{b.duration_hours}h</div>
                     </td>
-                    <td className="px-4 py-3 text-stone-600">{b.trip_start}</td>
+                    <td className="px-4 py-3 text-stone-600">{b.booking_date} {b.booking_time}</td>
                     <td className="px-4 py-3 font-medium text-stone-900">{inr(b.amount)}</td>
                     <td className="px-4 py-3 text-green-700">{inr(b.platform_fee)}</td>
                     <td className="px-4 py-3">
