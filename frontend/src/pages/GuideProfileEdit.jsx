@@ -6,9 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, MessageCircle, Sparkles, Video, Trash2, Clock, XCircle } from "lucide-react";
+import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, Video, Trash2, Clock, XCircle } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -27,8 +26,6 @@ export default function GuideProfileEdit() {
     bio: "",
     languages: "",
     specialities: "",
-    offers_chat: true,
-    offers_in_person: false,
     avatar_url: "",
   });
   const [guide, setGuide] = useState(null);
@@ -48,7 +45,6 @@ export default function GuideProfileEdit() {
           bio: data.guide.bio || "",
           languages: (data.guide.languages || []).join(", "),
           specialities: (data.guide.specialities || []).join(", "),
-          price: data.guide.price || 499,
           avatar_url: data.guide.avatar_url || "",
         });
       }
@@ -58,10 +54,6 @@ export default function GuideProfileEdit() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.offers_chat && !form.offers_in_person) {
-      toast.error("Turn on at least one package tier");
-      return;
-    }
     setSaving(true);
     try {
       const { data } = await api.post("/profile/guide", {
@@ -69,12 +61,10 @@ export default function GuideProfileEdit() {
         bio: form.bio.trim(),
         languages: form.languages.split(",").map((x) => x.trim()).filter(Boolean),
         specialities: form.specialities.split(",").map((x) => x.trim()).filter(Boolean),
-        offers_chat: form.offers_chat,
-        offers_in_person: form.offers_in_person,
         avatar_url: form.avatar_url.trim() || null,
       });
       setGuide(data.guide);
-      toast.success("Profile saved. You're now visible to travellers.");
+      toast.success(guide ? "Profile updated." : "Profile saved — now add at least one service on your dashboard to go live.");
       navigate("/local");
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
@@ -164,7 +154,7 @@ export default function GuideProfileEdit() {
           <CheckCircle2 className="h-5 w-5 mt-0.5 text-green-700" />
           <div className="text-sm text-green-900">
             <div className="font-medium">Almost done!</div>
-            <div>Add your bio, photo, expertise and price. You'll go live as <span className="font-semibold">Unverified</span> until you complete 3 trips (or an admin verifies you).</div>
+            <div>Add your bio, photo, and expertise here, then list your bite-sized experiences on your dashboard. You'll go live as <span className="font-semibold">Unverified</span> until you complete 3 trips (or an admin verifies you).</div>
           </div>
         </div>
       )}
@@ -223,7 +213,7 @@ export default function GuideProfileEdit() {
 
         {/* INTRO VIDEO */}
         <div>
-          <Label>Intro video <span className="text-stone-400 font-normal"></span></Label>
+          <Label>Intro video <span className="text-stone-400 font-normal">(optional)</span></Label>
           <p className="mt-1 text-xs text-stone-500">
             A short video of yourself builds trust with travellers. Every upload is reviewed by our team before it goes live.
           </p>
@@ -317,79 +307,13 @@ export default function GuideProfileEdit() {
           <Label htmlFor="specialities">Expertise <span className="text-stone-400 font-normal">(comma separated)</span></Label>
           <Input id="specialities" data-testid="profile-specialities" value={form.specialities} onChange={(e) => setForm({ ...form, specialities: e.target.value })} placeholder="Street food, heritage walks, photography" className="mt-1.5" />
         </div>
-        <div>
-          <Label>Package tiers</Label>
-          <p className="mt-1 text-xs text-stone-500">Turn on each tier you want to offer. At least one must be on.</p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {/* CHAT-ONLY ₹199 */}
-            <div
-              data-testid="tier-199-card"
-              data-active={form.offers_chat}
-              className={`relative rounded-2xl border-2 p-5 transition-colors ${
-                form.offers_chat ? "border-amber-500 bg-amber-50" : "border-stone-200 bg-white"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-amber-700">
-                  <MessageCircle className="h-4 w-4" /> Chat-only
-                </div>
-                <Switch
-                  data-testid="tier-199-toggle"
-                  checked={form.offers_chat}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, offers_chat: v }))}
-                  className="data-[state=checked]:bg-amber-600"
-                />
-              </div>
-              <div className="mt-3 flex items-baseline gap-1 font-heading">
-                <span className="text-3xl font-bold text-stone-900">₹199</span>
-                <span className="text-xs text-stone-500">/ one-time</span>
-              </div>
-              <p className="mt-3 text-sm text-stone-700 leading-relaxed">
-                Send a custom written itinerary and answer questions on chat. No in-person meet-up.
-              </p>
-              <ul className="mt-3 space-y-1 text-xs text-stone-600">
-                <li>✓ Day-by-day itinerary in writing</li>
-                <li>✓ In-app chat before & during trip</li>
-                <li className="text-stone-400">✗ No in-person guidance</li>
-              </ul>
-            </div>
 
-            {/* IN-PERSON ₹499/day */}
-            <div
-              data-testid="tier-499-card"
-              data-active={form.offers_in_person}
-              className={`relative rounded-2xl border-2 p-5 transition-colors ${
-                form.offers_in_person ? "border-green-700 bg-green-50" : "border-stone-200 bg-white"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-green-800">
-                  <Sparkles className="h-4 w-4" /> In-person
-                </div>
-                <Switch
-                  data-testid="tier-499-toggle"
-                  checked={form.offers_in_person}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, offers_in_person: v }))}
-                  className="data-[state=checked]:bg-green-700"
-                />
-              </div>
-              <div className="mt-3 flex items-baseline gap-1 font-heading">
-                <span className="text-3xl font-bold text-stone-900">₹499</span>
-                <span className="text-xs text-stone-500">/ per day</span>
-              </div>
-              <p className="mt-3 text-sm text-stone-700 leading-relaxed">
-                Everything in chat-only — plus you walk the city with them, booked per day when you both agree.
-              </p>
-              <ul className="mt-3 space-y-1 text-xs text-stone-600">
-                <li>✓ Day-by-day itinerary in writing</li>
-                <li>✓ In-app chat throughout</li>
-                <li>✓ Full in-person guidance during their trip</li>
-              </ul>
-            </div>
-          </div>
-          {!form.offers_chat && !form.offers_in_person && (
-            <p className="mt-2 text-xs text-red-600" data-testid="tier-error">Turn on at least one tier to save your profile.</p>
-          )}
+        <div className="rounded-xl border border-stone-200 bg-stone-50 p-5 text-sm text-stone-600">
+          Pricing and services are managed separately.{" "}
+          <button type="button" onClick={() => navigate("/local")} className="font-medium text-green-800 underline">
+            Add or edit your bite-sized experiences on your dashboard
+          </button>{" "}
+          — each is 2–8 hours, priced from ₹499.
         </div>
 
         <Button type="submit" data-testid="profile-save" disabled={saving} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
