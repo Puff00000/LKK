@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import ServiceCard from "@/components/ServiceCard";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { MapPin, Sparkles } from "lucide-react";
+import { MapPin, Sparkles, CalendarRange, Pencil } from "lucide-react";
+import { getTripDraft, tripDraftDayCount } from "@/lib/tripDraft";
 
 const CATEGORIES = [
   { value: "any", label: "All categories" },
-  { value: "food", label: " Food & Drink" },
-  { value: "shopping", label: " Shopping" },
-  { value: "culture", label: " Culture & Heritage" },
-  { value: "photography", label: " Photography" },
-  { value: "experience", label: " Recreation " },
-  { value: "nature", label: " Nature " },
+  { value: "food", label: "🍜 Food & Drink" },
+  { value: "shopping", label: "🛍️ Shopping" },
+  { value: "culture", label: "🏛️ Culture & Heritage" },
+  { value: "photography", label: "📸 Photography" },
+  { value: "experience", label: "🎨 Experience" },
+  { value: "nature", label: "🌿 Nature" },
 ];
 
 export default function Browse() {
@@ -21,9 +22,15 @@ export default function Browse() {
   const [cities, setCities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState("");
-  const [citySearch, setCitySearch] = useState(params.get("city") || "");
+  const [tripDraft, setLocalTripDraft] = useState(() => getTripDraft());
+  const [citySearch, setCitySearch] = useState(params.get("city") || tripDraft?.city || "");
   const category = params.get("category") || "any";
   const sort = params.get("sort") || "newest";
+
+  useEffect(() => {
+    // Refresh in case the draft changed since last visit (e.g. they went back and edited it)
+    setLocalTripDraft(getTripDraft());
+  }, []);
 
   useEffect(() => {
     api.get("/guides/cities").then(({ data }) => setCities(data));
@@ -71,6 +78,24 @@ export default function Browse() {
           Bargain a market, walk a street food trail, chase the sunrise — book 2 to 8 hours with a real local, in person.
         </p>
       </div>
+
+      {/* Trip context banner */}
+      {tripDraft?.city && (
+        <div data-testid="trip-context-banner" className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-green-200 bg-green-50 px-5 py-3">
+          <div className="flex items-center gap-2 text-sm text-green-900">
+            <CalendarRange className="h-4 w-4 shrink-0" />
+            <span>
+              Your trip: <span className="font-semibold">{tripDraft.city}</span>
+              {tripDraft.startDate && tripDraft.endDate && (
+                <> · {tripDraft.startDate} → {tripDraft.endDate} ({tripDraftDayCount(tripDraft)} day{tripDraftDayCount(tripDraft) !== 1 ? "s" : ""})</>
+              )}
+            </span>
+          </div>
+          <Link to="/create-trip" data-testid="edit-trip-link" className="flex items-center gap-1 text-sm font-medium text-green-800 hover:underline">
+            <Pencil className="h-3.5 w-3.5" /> Edit
+          </Link>
+        </div>
+      )}
 
       {/* Search bar */}
       <div className="mt-8 flex flex-col sm:flex-row gap-0 rounded-2xl border border-stone-200 bg-white shadow-sm overflow-hidden">
