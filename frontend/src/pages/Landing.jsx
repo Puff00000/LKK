@@ -103,12 +103,12 @@ export default function Landing() {
                     Log in
                   </Button>
                 </Link>
-                <Link to="/register">
+                <Link to="/create-trip">
                   <Button
                     data-testid="hero-get-started-btn"
                     className="h-12 bg-green-800 px-6 text-white hover:bg-green-900 hover:text-white shadow-[0_6px_0_0_rgba(180,83,9,0.95)] hover:shadow-[0_4px_0_0_rgba(180,83,9,0.95)] transition-all"
                   >
-                    Get started
+                    Create a trip
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
