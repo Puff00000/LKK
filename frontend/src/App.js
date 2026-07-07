@@ -5,6 +5,9 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import Navbar from "@/components/Navbar";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Landing from "@/pages/Landing";
+import CreateTrip from "@/pages/CreateTrip";
+import TripDates from "@/pages/TripDates";
+import TripConfirm from "@/pages/TripConfirm";
 import Browse from "@/pages/Browse";
 import GuideProfile from "@/pages/GuideProfile";
 import ServiceDetail from "@/pages/ServiceDetail";
@@ -27,6 +30,9 @@ export default function App() {
           <Navbar />
           <Routes>
             <Route path="/" element={<Landing />} />
+            <Route path="/create-trip" element={<CreateTrip />} />
+            <Route path="/create-trip/dates" element={<TripDates />} />
+            <Route path="/create-trip/confirm" element={<TripConfirm />} />
             <Route path="/browse" element={<Browse />} />
             <Route path="/guides/:id" element={<GuideProfile />} />
             <Route path="/services/:id" element={<ServiceDetail />} />
