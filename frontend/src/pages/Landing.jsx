@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { ArrowRight, MessageCircle, MapPinned, Sparkles, ShieldCheck, IndianRupee, Star } from "lucide-react";
 
 const cities = ["Jaipur", "Goa", "Manali", "Varanasi", "Bangalore", "Udaipur"];
@@ -57,6 +59,9 @@ function MeltHeadline({ text }) {
 }
 
 export default function Landing() {
+  const [demoHours, setDemoHours] = useState(2);
+  const demoPrice = 499 + (demoHours - 2) * 250;
+
   return (
     <div data-testid="landing-page" className="min-h-screen bg-white">
       {/* HERO */}
@@ -225,16 +230,34 @@ export default function Landing() {
             </p>
           </div>
 
-          <div className="mt-12 grid gap-3 sm:grid-cols-4 lg:grid-cols-7">
-            {[
-              { h: 2, p: 499 }, { h: 3, p: 749 }, { h: 4, p: 999 }, { h: 5, p: 1249 },
-              { h: 6, p: 1499 }, { h: 7, p: 1749 }, { h: 8, p: 1999 },
-            ].map((row) => (
-              <div key={row.h} className="rounded-xl border-2 border-stone-200 bg-white p-4 text-center hover:border-green-700 transition-colors">
-                <div className="text-xs uppercase tracking-[0.15em] text-stone-500">{row.h} hours</div>
-                <div className="mt-2 font-heading text-2xl font-bold text-stone-900">₹{row.p.toLocaleString("en-IN")}</div>
+          <div className="mt-12 rounded-3xl border-2 border-stone-900 bg-white p-8 sm:p-10 shadow-[8px_8px_0_0_rgba(21,128,61,0.15)]" data-testid="pricing-slider-card">
+            <div className="flex flex-col items-center text-center">
+              <div className="flex items-baseline gap-1 font-heading">
+                <span className="text-2xl text-stone-400">₹</span>
+                <span className="text-6xl sm:text-7xl font-bold text-stone-900" data-testid="pricing-slider-amount">
+                  {demoPrice.toLocaleString("en-IN")}
+                </span>
               </div>
-            ))}
+              <div className="mt-2 text-stone-500">for {demoHours} hour{demoHours !== 1 ? "s" : ""}, in person</div>
+            </div>
+
+            <div className="mx-auto mt-8 max-w-md">
+              <Slider
+                value={[demoHours]}
+                onValueChange={([v]) => setDemoHours(v)}
+                min={2}
+                max={8}
+                step={1}
+                data-testid="pricing-slider"
+              />
+              <div className="mt-2 flex justify-between text-xs text-stone-400">
+                {[2, 3, 4, 5, 6, 7, 8].map((h) => (
+                  <span key={h} className={h === demoHours ? "font-semibold text-green-800" : ""}>{h}h</span>
+                ))}
+              </div>
+            </div>
+
+            <p className="mt-6 text-center text-sm text-stone-500">Each extra hour is ₹250 — drag to see how it scales.</p>
           </div>
 
           <div className="mt-8 grid gap-6 md:grid-cols-3">
