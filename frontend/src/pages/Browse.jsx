@@ -7,12 +7,12 @@ import { MapPin, Sparkles } from "lucide-react";
 
 const CATEGORIES = [
   { value: "any", label: "All categories" },
-  { value: "food", label: "🍜 Food & Drink" },
-  { value: "shopping", label: "🛍️ Shopping" },
-  { value: "culture", label: "🏛️ Culture & Heritage" },
-  { value: "photography", label: "📸 Photography" },
-  { value: "experience", label: "🎨 Experience" },
-  { value: "nature", label: "🌿 Nature" },
+  { value: "food", label: " Food & Drink" },
+  { value: "shopping", label: " Shopping" },
+  { value: "culture", label: " Culture & Heritage" },
+  { value: "photography", label: " Photography" },
+  { value: "experience", label: " Recreation " },
+  { value: "nature", label: " Nature " },
 ];
 
 export default function Browse() {
