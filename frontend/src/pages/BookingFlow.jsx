@@ -11,6 +11,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { CalendarIcon, ShieldCheck, Lock, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { getTripDraft, setTripDraft } from "@/lib/tripDraft";
 
 const TIME_SLOTS = [
   "6:00 AM", "7:00 AM", "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM",
@@ -46,12 +47,14 @@ export default function BookingFlow() {
     }
     setSubmitting(true);
     try {
+      const draft = getTripDraft();
       const { data } = await api.post("/bookings", {
         service_id: service.id,
         booking_date: format(bookingDate, "yyyy-MM-dd"),
         booking_time: bookingTime,
         traveller_phone: phone,
         notes,
+        trip_id: draft?.tripId || null,
       });
       setBooking(data);
       setStep(2);
@@ -65,7 +68,22 @@ export default function BookingFlow() {
   const mockPay = async () => {
     setSubmitting(true);
     try {
-      await api.post(`/bookings/${booking.id}/pay`);
+      const draft = getTripDraft();
+      // Only send trip-draft details the first time — once a trip exists, the
+      // booking above is already linked to it via trip_id.
+      const payBody = !draft?.tripId && draft?.city && draft?.startDate && draft?.endDate
+        ? {
+            trip_city: draft.city,
+            trip_name: draft.tripName || null,
+            trip_traveller_count: draft.travellerCount || 1,
+            trip_start_date: draft.startDate,
+            trip_end_date: draft.endDate,
+          }
+        : {};
+      const { data } = await api.post(`/bookings/${booking.id}/pay`, payBody);
+      if (data.trip_id) {
+        setTripDraft({ tripId: data.trip_id });
+      }
       toast.success("Payment successful (mock). Your local has been notified.");
       navigate(`/bookings/${booking.id}`);
     } catch (e) {
