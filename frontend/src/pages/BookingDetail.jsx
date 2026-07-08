@@ -32,6 +32,7 @@ export default function BookingDetail() {
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [paying, setPaying] = useState(false);
   const messagesEndRef = useRef(null);
 
   const loadAll = async () => {
@@ -81,6 +82,19 @@ export default function BookingDetail() {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
     } finally {
       setConfirming(false);
+    }
+  };
+
+  const payNow = async () => {
+    setPaying(true);
+    try {
+      await api.post(`/bookings/${id}/pay`);
+      toast.success("Payment successful (mock). Your local has been notified.");
+      loadAll();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setPaying(false);
     }
   };
 
@@ -136,7 +150,23 @@ export default function BookingDetail() {
             <h2 className="font-heading text-xl font-bold text-stone-900">Your experience</h2>
 
             {booking.status === "pending_payment" && (
-              <p className="mt-4 text-stone-500">Waiting on payment to confirm this booking.</p>
+              <div className="mt-4">
+                <p className="text-stone-500">
+                  {isTraveller
+                    ? "This booking is saved but not paid for yet."
+                    : "Waiting on the traveller to complete payment."}
+                </p>
+                {isTraveller && (
+                  <Button
+                    onClick={payNow}
+                    disabled={paying}
+                    data-testid="pay-now-btn"
+                    className="mt-4 bg-green-800 text-white hover:bg-green-900 hover:text-white"
+                  >
+                    {paying ? "Processing…" : `Pay ${inr(booking.amount)} (mock)`}
+                  </Button>
+                )}
+              </div>
             )}
 
             {booking.status === "paid" && (
