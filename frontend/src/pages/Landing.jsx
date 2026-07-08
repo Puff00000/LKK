@@ -323,28 +323,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="relative border-t border-stone-200 bg-green-800 overflow-hidden">
-        <Marigold className="absolute -left-6 top-1/2 -translate-y-1/2 h-32 w-32 text-amber-400/40 hidden sm:block" />
-        <Marigold className="absolute -right-8 bottom-2 h-24 w-24 text-amber-300/50 hidden sm:block" />
-        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-16 sm:py-20 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <h2 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
-            Your next trip should feel personal. Start with a local.
-          </h2>
-          <Link to="/create-trip">
-            <Button
-              data-testid="cta-create-trip-btn"
-              className="h-12 bg-amber-400 px-6 text-stone-900 hover:bg-amber-300 hover:text-stone-900 font-semibold"
-            >
-              Create a trip
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          </Link>
-        </div>
-      </section>
-
       {/* FOOTER */}
-     {/* FOOTER */}
 <footer className="bg-stone-50 border-t border-stone-200">
   <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-stone-500">
     <div>LKK © {new Date().getFullYear()} · All rights reserved</div>
