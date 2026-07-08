@@ -92,7 +92,7 @@ export default function Login() {
         <p className="mt-6 text-sm text-stone-600">
           New to LKK?{" "}
           <Link
-            to={`/register${roleParam ? `?role=${roleParam}` : ""}`}
+            to={`/register?${new URLSearchParams({ ...(roleParam ? { role: roleParam } : {}), ...(next ? { next } : {}) }).toString()}`}
             className="font-medium text-green-800 hover:underline"
             data-testid="login-to-register"
           >
