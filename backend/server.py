@@ -231,6 +231,16 @@ class BookingIn(BaseModel):
     traveller_phone: str
     notes: Optional[str] = ""
     trip_id: Optional[str] = None
+    # If trip_id isn't already known, these create the trip right now — the
+    # traveller is authenticated by this point (booking creation requires login),
+    # so this is the moment a trip stops being a browser-only draft and becomes
+    # a real row tied to their account (status: draft, until a booking under it
+    # is actually paid for).
+    trip_city: Optional[str] = None
+    trip_name: Optional[str] = None
+    trip_traveller_count: Optional[int] = None
+    trip_start_date: Optional[str] = None
+    trip_end_date: Optional[str] = None
 
 class TripIn(BaseModel):
     city: str
@@ -937,16 +947,44 @@ async def my_trips(user: dict = Depends(require_role("traveller"))):
         bd = row_to_dict(b)
         bd["id"] = str(bd["id"])
         bookings_by_trip.setdefault(str(b["trip_id"]), []).append(bd)
+    # A trip only "counts" as a real upcoming/past trip once at least one booking
+    # under it has actually been paid for. Otherwise — even if it's sitting in the
+    # database tied to the traveller's account — it's still just a draft.
+    CONFIRMED_STATUSES = {"paid", "accepted", "itinerary_delivered", "completed", "disputed"}
     today = datetime.now(timezone.utc).date()
-    upcoming, past = [], []
+    draft, upcoming, past = [], [], []
     for t in trips:
         td = _trip_out(t)
-        td["bookings"] = bookings_by_trip.get(td["id"], [])
-        if t["end_date"] >= today:
+        trip_bookings = bookings_by_trip.get(td["id"], [])
+        td["bookings"] = trip_bookings
+        is_confirmed = any(b["status"] in CONFIRMED_STATUSES for b in trip_bookings)
+        if not is_confirmed:
+            draft.append(td)
+        elif t["end_date"] >= today:
             upcoming.append(td)
         else:
             past.append(td)
-    return {"upcoming": upcoming, "past": past}
+    return {"draft": draft, "upcoming": upcoming, "past": past}
+
+@api.delete("/trips/{trip_id}")
+async def delete_trip(trip_id: str, user: dict = Depends(require_role("traveller"))):
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            "SELECT * FROM trips WHERE id = $1 AND traveller_user_id = $2",
+            trip_id, str(user["id"])
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        confirmed = await conn.fetchval(
+            """SELECT COUNT(*) FROM bookings WHERE trip_id = $1
+               AND status IN ('paid','accepted','itinerary_delivered','completed','disputed')""",
+            trip_id
+        )
+        if confirmed:
+            raise HTTPException(status_code=400, detail="Can't delete a trip with a confirmed booking")
+        # Cascades to any unpaid/cancelled bookings still sitting under this draft
+        await conn.execute("DELETE FROM trips WHERE id = $1", trip_id)
+    return {"ok": True}
 
 # --- Bookings --------------------------------------------------------------
 @api.post("/bookings")
@@ -971,6 +1009,16 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
             if not trip:
                 raise HTTPException(status_code=404, detail="Trip not found")
             trip_id = str(trip["id"])
+        elif body.trip_city and body.trip_start_date and body.trip_end_date:
+            trip_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO trips (id, traveller_user_id, city, trip_name, traveller_count,
+                   start_date, end_date, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                trip_id, str(user["id"]), body.trip_city, body.trip_name or None,
+                body.trip_traveller_count or 1, body.trip_start_date, body.trip_end_date,
+                datetime.now(timezone.utc)
+            )
         booking_id = str(uuid.uuid4())
         await conn.execute(
             """INSERT INTO bookings (id, guide_id, guide_name, guide_city, local_user_id,
@@ -996,18 +1044,8 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
     d["id"] = str(d["id"])
     return d
 
-class PayIn(BaseModel):
-    # Optional trip-draft details from the Create-a-trip flow. Only used the first
-    # time a traveller pays for a booking under a given draft — that's the exact
-    # moment the trip becomes a real, saved row instead of a browser-only draft.
-    trip_city: Optional[str] = None
-    trip_name: Optional[str] = None
-    trip_traveller_count: Optional[int] = None
-    trip_start_date: Optional[str] = None
-    trip_end_date: Optional[str] = None
-
 @api.post("/bookings/{booking_id}/pay")
-async def mock_pay(booking_id: str, body: PayIn = PayIn(), user: dict = Depends(require_role("traveller"))):
+async def mock_pay(booking_id: str, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
@@ -1015,29 +1053,16 @@ async def mock_pay(booking_id: str, body: PayIn = PayIn(), user: dict = Depends(
         if booking["status"] != "pending_payment":
             raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
         mock_payment_id = f"pay_mock_{uuid.uuid4().hex[:16]}"
-
-        trip_id = booking["trip_id"]
-        if not trip_id and body.trip_city and body.trip_start_date and body.trip_end_date:
-            trip_id = str(uuid.uuid4())
-            await conn.execute(
-                """INSERT INTO trips (id, traveller_user_id, city, trip_name, traveller_count,
-                   start_date, end_date, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
-                trip_id, str(user["id"]), body.trip_city, body.trip_name or None,
-                body.trip_traveller_count or 1, body.trip_start_date, body.trip_end_date,
-                datetime.now(timezone.utc)
-            )
-
         await conn.execute(
-            "UPDATE bookings SET status='paid', payment_id=$1, paid_at=$2, trip_id=$3 WHERE id=$4",
-            mock_payment_id, datetime.now(timezone.utc), trip_id, booking_id
+            "UPDATE bookings SET status='paid', payment_id=$1, paid_at=$2 WHERE id=$3",
+            mock_payment_id, datetime.now(timezone.utc), booking_id
         )
     await send_email(
         user["email"],
         "Payment Received — LKK 🌿",
         f"<h2>Payment confirmed!</h2><p>Amount: ₹{booking['amount']}. Your local will send your itinerary soon.</p>"
     )
-    return {"ok": True, "payment_id": mock_payment_id, "status": "paid", "trip_id": trip_id}
+    return {"ok": True, "payment_id": mock_payment_id, "status": "paid"}
 
 @api.get("/bookings/mine")
 async def my_bookings(user: dict = Depends(get_current_user)):
