@@ -1,48 +1,83 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, formatApiError, inr } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { CalendarIcon, ShieldCheck, Lock, Clock } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { CalendarIcon, ShieldCheck, Lock, Clock, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { getTripDraft, setTripDraft } from "@/lib/tripDraft";
+import { getTripDraft, setTripDraft, getPendingBooking, setPendingBooking, clearPendingBooking } from "@/lib/tripDraft";
 
 const TIME_SLOTS = [
   "6:00 AM", "7:00 AM", "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM",
-  "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM",
+  "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM",
+  "6:00 PM", "7:00 PM", "8:00 PM",
 ];
 
 export default function BookingFlow() {
-  const { id } = useParams(); // service id
+  const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+
   const [service, setService] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(1);
+  const [booking, setBooking] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [authPromptOpen, setAuthPromptOpen] = useState(false);
+
   const [bookingDate, setBookingDate] = useState(null);
   const [bookingTime, setBookingTime] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [booking, setBooking] = useState(null);
 
   useEffect(() => {
-    api.get(`/services/${id}`).then(({ data }) => setService(data));
+    api.get(`/services/${id}`).then(({ data }) => {
+      setService(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, [id]);
 
-  if (!service) return <div className="py-20 text-center text-stone-500" data-testid="booking-loading">Loading…</div>;
+  // If we're arriving back here after a login/signup wall, restore whatever
+  // the traveller had already filled in before we sent them off to auth.
+  useEffect(() => {
+    if (!user) return;
+    const pending = getPendingBooking(id);
+    if (pending) {
+      if (pending.bookingDate) setBookingDate(new Date(pending.bookingDate));
+      if (pending.bookingTime) setBookingTime(pending.bookingTime);
+      if (pending.phone) setPhone(pending.phone);
+      if (pending.notes) setNotes(pending.notes);
+      clearPendingBooking();
+    }
+  }, [user, id]);
 
-  const amount = service.price;
-  const fee = Math.round((amount * 10) / 100);
-  const localGets = amount - fee;
+  if (loading) return <div className="py-20 text-center text-stone-500">Loading…</div>;
+  if (!service) return <div className="py-20 text-center text-stone-500">Service not found</div>;
+
+  const formIsValid = bookingDate && bookingTime && phone;
 
   const goPayment = async () => {
-    if (!bookingDate || !bookingTime || !phone) {
+    if (!formIsValid) {
       toast.error("Please pick a date, time, and add your phone number.");
+      return;
+    }
+    if (!user) {
+      // Save the in-progress form and send them to register/log in — they'll
+      // land right back here with everything still filled in.
+      setPendingBooking(id, {
+        bookingDate: format(bookingDate, "yyyy-MM-dd"),
+        bookingTime,
+        phone,
+        notes,
+      });
+      setAuthPromptOpen(true);
       return;
     }
     setSubmitting(true);
@@ -55,7 +90,15 @@ export default function BookingFlow() {
         traveller_phone: phone,
         notes,
         trip_id: draft?.tripId || null,
+        trip_city: !draft?.tripId ? draft?.city || null : null,
+        trip_name: !draft?.tripId ? draft?.tripName || null : null,
+        trip_traveller_count: !draft?.tripId ? draft?.travellerCount || 1 : null,
+        trip_start_date: !draft?.tripId ? draft?.startDate || null : null,
+        trip_end_date: !draft?.tripId ? draft?.endDate || null : null,
       });
+      if (data.trip_id) {
+        setTripDraft({ tripId: data.trip_id });
+      }
       setBooking(data);
       setStep(2);
     } catch (e) {
@@ -68,22 +111,7 @@ export default function BookingFlow() {
   const mockPay = async () => {
     setSubmitting(true);
     try {
-      const draft = getTripDraft();
-      // Only send trip-draft details the first time — once a trip exists, the
-      // booking above is already linked to it via trip_id.
-      const payBody = !draft?.tripId && draft?.city && draft?.startDate && draft?.endDate
-        ? {
-            trip_city: draft.city,
-            trip_name: draft.tripName || null,
-            trip_traveller_count: draft.travellerCount || 1,
-            trip_start_date: draft.startDate,
-            trip_end_date: draft.endDate,
-          }
-        : {};
-      const { data } = await api.post(`/bookings/${booking.id}/pay`, payBody);
-      if (data.trip_id) {
-        setTripDraft({ tripId: data.trip_id });
-      }
+      await api.post(`/bookings/${booking.id}/pay`);
       toast.success("Payment successful (mock). Your local has been notified.");
       navigate(`/bookings/${booking.id}`);
     } catch (e) {
@@ -94,133 +122,141 @@ export default function BookingFlow() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-10" data-testid="booking-flow">
-      <div className="text-xs uppercase tracking-[0.2em] text-green-800">Booking</div>
-      <h1 className="mt-2 font-heading text-3xl sm:text-4xl font-bold tracking-tight text-stone-900">
-        Book "{service.title}"
+    <div className="mx-auto max-w-2xl px-4 sm:px-6 py-10" data-testid="booking-flow-page">
+      <div className="text-xs uppercase tracking-[0.2em] text-green-800">
+        {step === 1 ? "Step 1 of 2 — Details" : "Step 2 of 2 — Payment"}
+      </div>
+      <h1 className="mt-2 font-heading text-2xl sm:text-3xl font-bold tracking-tight text-stone-900">
+        {service.title}
       </h1>
+      <div className="mt-1 text-sm text-stone-500">
+        {service.guide_name} · {service.guide_city} · {service.duration_hours}h
+      </div>
 
-      <ol className="mt-6 flex items-center gap-4 text-sm">
-        {[
-          { n: 1, t: "Trip details" },
-          { n: 2, t: "Payment" },
-        ].map((s) => (
-          <li
-            key={s.n}
-            className={`flex items-center gap-2 ${step >= s.n ? "text-green-800" : "text-stone-400"}`}
-            data-testid={`step-${s.n}`}
+      {step === 1 && (
+        <div className="mt-8 space-y-5 rounded-2xl border border-stone-200 bg-white p-6" data-testid="booking-step-1">
+          <div>
+            <Label>Date</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" data-testid="booking-date-trigger" className="mt-1.5 w-full justify-start border-stone-300 font-normal">
+                  <CalendarIcon className="mr-2 h-4 w-4 text-stone-500" />
+                  {bookingDate ? format(bookingDate, "EEE, d MMM yyyy") : "Pick a date"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0">
+                <Calendar
+                  mode="single"
+                  selected={bookingDate}
+                  onSelect={setBookingDate}
+                  disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <div>
+            <Label>Time</Label>
+            <div className="mt-1.5 grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {TIME_SLOTS.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  data-testid={`time-slot-${t}`}
+                  onClick={() => setBookingTime(t)}
+                  className={`rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${
+                    bookingTime === t
+                      ? "border-green-700 bg-green-50 text-green-900"
+                      : "border-stone-200 text-stone-600 hover:border-stone-300"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <Label htmlFor="phone">Your phone number</Label>
+            <Input id="phone" data-testid="booking-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98765 43210" className="mt-1.5" />
+          </div>
+
+          <div>
+            <Label htmlFor="notes">Notes for your local <span className="text-stone-400 font-normal">(optional)</span></Label>
+            <Textarea id="notes" data-testid="booking-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Anything they should know before you meet?" className="mt-1.5" />
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg bg-stone-50 border border-stone-200 px-4 py-3 text-sm">
+            <span className="text-stone-500">Service fee ({service.duration_hours}h, in person)</span>
+            <span className="font-heading text-lg font-bold text-stone-900">{inr(service.price)}</span>
+          </div>
+
+          <Button
+            onClick={goPayment}
+            disabled={submitting || !formIsValid}
+            data-testid="booking-continue-btn"
+            className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white disabled:opacity-40"
           >
-            <span className={`grid h-7 w-7 place-items-center rounded-full text-xs font-medium ${step >= s.n ? "bg-green-800 text-white" : "bg-stone-100 text-stone-500"}`}>{s.n}</span>
-            {s.t}
-          </li>
-        ))}
-      </ol>
-
-      <div className="mt-8 grid gap-8 md:grid-cols-[1fr_280px] items-start">
-        <div className="space-y-6">
-          {step === 1 ? (
-            <div className="rounded-2xl border border-stone-200 bg-white p-6 space-y-5">
-              <div className="rounded-xl bg-green-50 border border-green-100 p-4 text-sm">
-                <div className="font-heading text-base font-semibold text-stone-900">{service.title}</div>
-                <div className="mt-1 flex items-center gap-3 text-stone-600">
-                  <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {service.duration_hours} hours</span>
-                  <span className="font-medium text-stone-900">{inr(amount)}</span>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label>Meetup date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        data-testid="booking-date-btn"
-                        className="mt-1.5 w-full justify-start font-normal border-stone-200"
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-stone-500" />
-                        {bookingDate ? format(bookingDate, "PPP") : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="p-0 w-auto" align="start">
-                      <Calendar mode="single" selected={bookingDate} onSelect={setBookingDate} disabled={(d) => d < new Date(new Date().setHours(0,0,0,0))} />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div>
-                  <Label>Meetup time</Label>
-                  <Select value={bookingTime} onValueChange={setBookingTime}>
-                    <SelectTrigger data-testid="booking-time-select" className="mt-1.5 border-stone-200">
-                      <SelectValue placeholder="Pick a time" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TIME_SLOTS.map((t) => (
-                        <SelectItem key={t} value={t}>{t}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <Label>Your phone number</Label>
-                <Input data-testid="trip-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 9xxxxxxxxx" className="mt-1.5" />
-              </div>
-
-              <div>
-                <Label>Notes for your local <span className="text-stone-400 font-normal">(optional)</span></Label>
-                <Textarea data-testid="trip-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Meeting point preference, dietary notes, anything they should know…" className="mt-1.5" rows={4} />
-              </div>
-
-              <Button data-testid="booking-continue" onClick={goPayment} disabled={submitting} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
-                Continue to payment — {inr(amount)}
-              </Button>
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-stone-200 bg-white p-6 space-y-5" data-testid="payment-step">
-              <div className="rounded-xl bg-green-50 border border-green-100 p-4 text-sm text-green-900">
-                <div className="flex items-center gap-2 font-medium"><Lock className="h-4 w-4" /> Mock Razorpay (test mode)</div>
-                <p className="mt-1 text-green-900/80">
-                  Payment is simulated for the MVP. In production, this calls Razorpay's order + checkout flow. Your
-                  money is held in escrow until you confirm the meetup happened.
-                </p>
-              </div>
-
-              <div className="grid gap-3 rounded-xl border border-stone-200 p-4 text-sm">
-                <div className="flex justify-between"><span className="text-stone-500">{booking?.service_title || service.title} · {service.duration_hours}h</span><span className="text-stone-900">{inr(booking?.amount || amount)}</span></div>
-                <div className="flex justify-between"><span className="text-stone-500">LKK platform fee (10%)</span><span className="text-stone-900">{inr(booking?.platform_fee || fee)}</span></div>
-                <div className="flex justify-between border-t border-stone-100 pt-3 font-heading text-base font-semibold"><span>Total</span><span>{inr(booking?.amount || amount)}</span></div>
-                <div className="text-xs text-stone-500">Your local receives {inr(booking?.local_payout || localGets)} after you confirm the meetup happened.</div>
-              </div>
-
-              <Button data-testid="pay-now-btn" onClick={mockPay} disabled={submitting} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
-                {submitting ? "Processing…" : `Pay ${inr(booking?.amount || amount)} (mock)`}
-              </Button>
-            </div>
+            {submitting ? "Please wait…" : "Proceed to pay"}
+          </Button>
+          {!user && (
+            <p className="text-center text-xs text-stone-400">You'll be asked to log in or sign up before payment.</p>
           )}
         </div>
+      )}
 
-        <aside className="rounded-2xl border border-stone-200 bg-white p-6 md:sticky md:top-24">
-          <div className="text-xs uppercase tracking-[0.2em] text-stone-500">Your local</div>
-          <div className="mt-3 flex items-center gap-3">
-            <div className="h-12 w-12 overflow-hidden rounded-full bg-green-50">
-              {service.guide_avatar_url && <img src={service.guide_avatar_url.startsWith("http") ? service.guide_avatar_url : `${process.env.REACT_APP_BACKEND_URL}${service.guide_avatar_url}`} alt="" className="h-full w-full object-cover" />}
-            </div>
-            <div>
-              <div className="font-heading text-base font-semibold text-stone-900">{service.guide_name}</div>
-              <div className="text-xs text-stone-500">{service.guide_city}</div>
-            </div>
+      {step === 2 && booking && (
+        <div className="mt-8 space-y-5 rounded-2xl border border-stone-200 bg-white p-6" data-testid="booking-step-2">
+          <div className="flex items-center justify-between rounded-lg bg-green-50 border border-green-100 px-4 py-3 text-sm">
+            <span className="text-green-900">Booking created — awaiting payment</span>
+            <span className="font-heading text-lg font-bold text-green-900">{inr(booking.amount)}</span>
           </div>
-          <div className="mt-5 rounded-lg bg-stone-50 p-3 text-sm text-stone-700">
-            <div className="text-xs text-stone-500 uppercase tracking-wide">{service.title} · {service.duration_hours}h</div>
-            <div className="mt-1 font-heading text-2xl font-bold text-stone-900">{inr(amount)}</div>
+          <div className="rounded-lg border border-dashed border-stone-300 p-4 text-sm text-stone-500">
+            <div className="flex items-center gap-2 mb-2"><Lock className="h-4 w-4" /> Mock payment (no real card charged)</div>
+            This is a demo checkout — clicking below just marks the booking as paid.
           </div>
-          <ul className="mt-4 space-y-2 text-xs text-stone-500">
-            <li className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-green-700" /> Held in escrow</li>
-            <li className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-green-700" /> Refundable if the meetup falls through</li>
-          </ul>
-        </aside>
-      </div>
+          <Button
+            onClick={mockPay}
+            disabled={submitting}
+            data-testid="booking-pay-btn"
+            className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
+          >
+            {submitting ? "Processing…" : `Pay ${inr(booking.amount)} (mock)`}
+          </Button>
+          <div className="flex items-center justify-center gap-2 text-xs text-stone-400">
+            <ShieldCheck className="h-3.5 w-3.5" /> Held in escrow until you confirm the experience happened
+          </div>
+        </div>
+      )}
+
+      {/* Auth wall — only reached at the actual pay step */}
+      <Dialog open={authPromptOpen} onOpenChange={setAuthPromptOpen}>
+        <DialogContent data-testid="auth-wall-dialog">
+          <DialogHeader>
+            <DialogTitle>Almost there — log in to pay</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-stone-600">
+            Your booking details are saved. Log in or create a traveller account to continue — you'll land right back here.
+          </p>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button
+              onClick={() => navigate(`/login?next=/book/${id}`)}
+              data-testid="auth-wall-login-btn"
+              className="w-full bg-green-800 text-white hover:bg-green-900 hover:text-white"
+            >
+              <LogIn className="mr-2 h-4 w-4" /> Log in
+            </Button>
+            <Button
+              onClick={() => navigate(`/register?role=traveller&next=/book/${id}`)}
+              data-testid="auth-wall-signup-btn"
+              variant="outline"
+              className="w-full border-stone-300"
+            >
+              <UserPlus className="mr-2 h-4 w-4" /> Sign up as a traveller
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
