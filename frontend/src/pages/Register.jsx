@@ -48,6 +48,7 @@ export default function Register() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const roleParam = searchParams.get("role");
+  const next = searchParams.get("next");
   const lockedRole = roleParam === "local" || roleParam === "traveller" ? roleParam : null;
 
   const [form, setForm] = useState({
@@ -105,7 +106,7 @@ export default function Register() {
     }
     if (!isLocal) {
       toast.success(`Welcome to LKK, ${res.user.name}`);
-      navigate("/dashboard");
+      navigate(next || "/dashboard");
       return;
     }
     // local flow → trigger OTP send and move to step 2
@@ -252,7 +253,7 @@ export default function Register() {
               <p className="text-xs text-center text-stone-500">
                 Wrong choice?{" "}
                 <Link
-                  to={`/register?role=${isLocal ? "traveller" : "local"}`}
+                  to={`/register?role=${isLocal ? "traveller" : "local"}${next ? `&next=${encodeURIComponent(next)}` : ""}`}
                   data-testid="register-switch-role"
                   className="font-medium text-green-800 hover:underline"
                 >
@@ -334,7 +335,7 @@ export default function Register() {
         {step === 1 && (
           <p className="mt-6 text-sm text-stone-600">
             Already have an account?{" "}
-            <Link to={`/login?role=${role}`} className="font-medium text-green-800 hover:underline" data-testid="register-to-login">
+            <Link to={`/login?role=${role}${next ? `&next=${encodeURIComponent(next)}` : ""}`} className="font-medium text-green-800 hover:underline" data-testid="register-to-login">
               Log in
             </Link>
           </p>
