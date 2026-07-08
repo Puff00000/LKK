@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, inr } from "@/lib/api";
+import { api, inr, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CalendarIcon, MapPin, Plus } from "lucide-react";
+import { CalendarIcon, MapPin, Plus, Trash2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 
 const STATUS = {
   pending_payment: { text: "Awaiting payment", className: "bg-amber-50 text-amber-800 border-amber-200" },
@@ -15,6 +16,78 @@ const STATUS = {
   cancelled:       { text: "Cancelled", className: "bg-red-50 text-red-700 border-red-200" },
   disputed:        { text: "In dispute", className: "bg-red-50 text-red-800 border-red-200" },
 };
+
+function DraftTripCard({ trip, onDeleted }) {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await api.delete(`/trips/${trip.id}`);
+      toast.success("Draft removed");
+      onDeleted(trip.id);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/30 p-5" data-testid={`draft-trip-card-${trip.id}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="font-heading text-lg font-semibold text-stone-900">
+              {trip.trip_name || `Trip to ${trip.city}`}
+            </div>
+            <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300">Draft</Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 mt-1 text-sm text-stone-500">
+            <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {trip.city}</span>
+            <span className="flex items-center gap-1"><CalendarIcon className="h-3.5 w-3.5" /> {trip.start_date} → {trip.end_date}</span>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleDelete}
+          disabled={deleting}
+          data-testid={`delete-draft-${trip.id}`}
+          className="border-red-200 text-red-700 hover:bg-red-50 h-9"
+        >
+          <Trash2 className="mr-1.5 h-3.5 w-3.5" /> {deleting ? "Removing…" : "Delete draft"}
+        </Button>
+      </div>
+      {trip.bookings.length > 0 && (
+        <ul className="mt-4 divide-y divide-amber-100 border-t border-amber-100">
+          {trip.bookings.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-3 py-3">
+              <div>
+                <span className="text-sm text-stone-700">{b.service_title}</span>
+                <span className="ml-2 text-xs text-stone-400">{b.booking_date} · {b.booking_time}</span>
+              </div>
+              <Link
+                to={`/bookings/${b.id}`}
+                data-testid={`resume-payment-${b.id}`}
+                className="text-sm font-medium text-green-800 hover:underline shrink-0"
+              >
+                Resume payment →
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      {trip.bookings.length === 0 && (
+        <div className="mt-3 text-sm text-stone-500">
+          No services picked yet.{" "}
+          <Link to={`/browse?city=${encodeURIComponent(trip.city)}`} className="text-green-800 font-medium hover:underline">
+            Browse locals in {trip.city} →
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TripCard({ trip }) {
   const total = trip.bookings.reduce((sum, b) => sum + (b.amount || 0), 0);
@@ -59,7 +132,7 @@ function TripCard({ trip }) {
 export default function TravellerDashboard() {
   const { user } = useAuth();
   const [bookings, setBookings] = useState([]);
-  const [trips, setTrips] = useState({ upcoming: [], past: [] });
+  const [trips, setTrips] = useState({ draft: [], upcoming: [], past: [] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -70,9 +143,13 @@ export default function TravellerDashboard() {
     });
   }, []);
 
+  const removeDraftTrip = (tripId) => {
+    setTrips((prev) => ({ ...prev, draft: prev.draft.filter((t) => t.id !== tripId) }));
+  };
+
   // Bookings not linked to any trip (e.g. booked directly via Browse, skipping the Create-a-trip flow)
   const linkedBookingIds = new Set(
-    [...trips.upcoming, ...trips.past].flatMap((t) => t.bookings.map((b) => b.id))
+    [...trips.draft, ...trips.upcoming, ...trips.past].flatMap((t) => t.bookings.map((b) => b.id))
   );
   const unlinkedBookings = bookings.filter((b) => !linkedBookingIds.has(b.id));
   const upcoming = unlinkedBookings.filter((b) => !["completed", "cancelled"].includes(b.status));
@@ -97,8 +174,17 @@ export default function TravellerDashboard() {
       </div>
 
       {/* Trips */}
-      {!loading && (trips.upcoming.length > 0 || trips.past.length > 0) && (
+      {!loading && (trips.draft.length > 0 || trips.upcoming.length > 0 || trips.past.length > 0) && (
         <>
+          {trips.draft.length > 0 && (
+            <div className="mt-10">
+              <h2 className="font-heading text-xl font-bold text-stone-900">Draft trips</h2>
+              <p className="mt-1 text-sm text-stone-500">Saved but not paid for yet — pick up where you left off, or clear them out.</p>
+              <div className="mt-4 space-y-4">
+                {trips.draft.map((t) => <DraftTripCard key={t.id} trip={t} onDeleted={removeDraftTrip} />)}
+              </div>
+            </div>
+          )}
           {trips.upcoming.length > 0 && (
             <div className="mt-10">
               <h2 className="font-heading text-xl font-bold text-stone-900">Upcoming trips</h2>
@@ -120,7 +206,7 @@ export default function TravellerDashboard() {
 
       {loading ? (
         <div className="mt-10 text-stone-500">Loading…</div>
-      ) : bookings.length === 0 && trips.upcoming.length === 0 && trips.past.length === 0 ? (
+      ) : bookings.length === 0 && trips.draft.length === 0 && trips.upcoming.length === 0 && trips.past.length === 0 ? (
         <div className="mt-10 rounded-2xl border border-dashed border-stone-300 p-16 text-center">
           <div className="font-heading text-xl text-stone-900">No trips yet</div>
           <p className="mt-2 text-stone-500">Tell us where you're headed and we'll line up locals there.</p>
