@@ -50,8 +50,7 @@ export default function ServiceDetail() {
   const allInclusive = extraCostRows.length === 0;
 
   const handleBook = () => {
-    if (!user) return navigate(`/login?next=/book/${service.id}`);
-    if (user.role !== "traveller") return navigate("/");
+    if (user && user.role !== "traveller") return navigate("/");
     navigate(`/book/${service.id}`);
   };
 
