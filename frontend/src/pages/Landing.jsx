@@ -76,10 +76,6 @@ export default function Landing() {
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-16 sm:py-20 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <h2 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
             Your next trip should feel personal. Start with a local.
-          </h2>
-         
-            
-        
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </Link>
