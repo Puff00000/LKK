@@ -97,4 +97,22 @@ if (isDevServer) {
   }
 }
 
+// craco doesn't forward the webpack '@' alias to Jest, so map it explicitly
+// or "@/lib/api" style imports break under `craco test`. Also, react-router-dom
+// 7.5.1's package.json "main" field points at a file that doesn't exist in the
+// published package (dist/main.js); Jest's resolver doesn't support its
+// "exports" map the way webpack does, so it needs an explicit path to the
+// real entry file (dist/index.js).
+webpackConfig.jest = {
+  configure: (jestConfig) => {
+    jestConfig.moduleNameMapper = {
+      ...jestConfig.moduleNameMapper,
+      "^@/(.*)$": "<rootDir>/src/$1",
+      "^react-router-dom$": "<rootDir>/node_modules/react-router-dom/dist/index.js",
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+    };
+    return jestConfig;
+  },
+};
+
 module.exports = webpackConfig;
