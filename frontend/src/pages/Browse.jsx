@@ -3,8 +3,20 @@ import { useSearchParams, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import ServiceCard from "@/components/ServiceCard";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { MapPin, Sparkles, CalendarRange, Pencil } from "lucide-react";
-import { getTripDraft, tripDraftDayCount } from "@/lib/tripDraft";
+import { MapPin, Sparkles, CalendarRange, Pencil, X } from "lucide-react";
+import { getTripDraft, tripDraftDayCount, clearTripDraft } from "@/lib/tripDraft";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 
 const CATEGORIES = [
   { value: "any", label: "All categories" },
@@ -17,6 +29,7 @@ const CATEGORIES = [
 ];
 
 export default function Browse() {
+  const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [services, setServices] = useState([]);
   const [cities, setCities] = useState([]);
@@ -26,6 +39,11 @@ export default function Browse() {
   const [citySearch, setCitySearch] = useState(params.get("city") || tripDraft?.city || "");
   const category = params.get("category") || "any";
   const sort = params.get("sort") || "newest";
+
+  // Only anonymous users and travellers should ever see "your trip" context —
+  // it's meaningless for a local or admin account, and sessionStorage isn't
+  // scoped per-account so a stale draft can otherwise leak across role switches.
+  const showTripBanner = !user || user.role === "traveller";
 
   useEffect(() => {
     // Refresh in case the draft changed since last visit (e.g. they went back and edited it)
@@ -66,6 +84,11 @@ export default function Browse() {
     setParams(next);
   };
 
+  const handleClearTripDraft = () => {
+    clearTripDraft();
+    setLocalTripDraft(null);
+  };
+
   return (
     <div data-testid="browse-page" className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-12">
       {/* Header */}
@@ -80,7 +103,7 @@ export default function Browse() {
       </div>
 
       {/* Trip context banner */}
-      {tripDraft?.city && (
+      {showTripBanner && tripDraft?.city && (
         <div data-testid="trip-context-banner" className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-green-200 bg-green-50 px-5 py-3">
           <div className="flex items-center gap-2 text-sm text-green-900">
             <CalendarRange className="h-4 w-4 shrink-0" />
@@ -91,9 +114,37 @@ export default function Browse() {
               )}
             </span>
           </div>
-          <Link to="/create-trip" data-testid="edit-trip-link" className="flex items-center gap-1 text-sm font-medium text-green-800 hover:underline">
-            <Pencil className="h-3.5 w-3.5" /> Edit
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link to="/create-trip" data-testid="edit-trip-link" className="flex items-center gap-1 text-sm font-medium text-green-800 hover:underline">
+              <Pencil className="h-3.5 w-3.5" /> Edit
+            </Link>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  data-testid="clear-trip-link"
+                  className="flex items-center gap-1 text-sm font-medium text-stone-500 hover:text-stone-700 hover:underline"
+                >
+                  <X className="h-3.5 w-3.5" /> Clear
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear your trip?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes <span className="font-medium">{tripDraft.city}</span>
+                    {tripDraft.startDate && tripDraft.endDate ? ` (${tripDraft.startDate} → ${tripDraft.endDate})` : ""} from this browsing session. You can always set a new trip later.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction data-testid="confirm-clear-trip" onClick={handleClearTripDraft}>
+                    Clear trip
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
         </div>
       )}
 
