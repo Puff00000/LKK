@@ -323,6 +323,17 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* CTA */}
+      <section className="relative border-t border-stone-200 bg-green-800 overflow-hidden">
+        <Marigold className="absolute -left-6 top-1/2 -translate-y-1/2 h-32 w-32 text-amber-400/40 hidden sm:block" />
+        <Marigold className="absolute -right-8 bottom-2 h-24 w-24 text-amber-300/50 hidden sm:block" />
+        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-16 sm:py-20 text-center">
+          <h2 className="font-heading text-3xl sm:text-4xl font-bold tracking-tight text-white max-w-2xl mx-auto">
+            Your next trip should feel personal. Start with a local.
+          </h2>
+        </div>
+      </section>
+
       {/* FOOTER */}
 <footer className="bg-stone-50 border-t border-stone-200">
   <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-stone-500">
