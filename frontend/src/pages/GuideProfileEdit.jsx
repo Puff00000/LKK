@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, Video, Trash2, Clock, XCircle } from "lucide-react";
+import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, Video, Clock, XCircle, AlertTriangle } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -27,6 +27,7 @@ export default function GuideProfileEdit() {
     languages: "",
     specialities: "",
     avatar_url: "",
+    video_url: "",
   });
   const [guide, setGuide] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,14 +47,23 @@ export default function GuideProfileEdit() {
           languages: (data.guide.languages || []).join(", "),
           specialities: (data.guide.specialities || []).join(", "),
           avatar_url: data.guide.avatar_url || "",
+          video_url: data.guide.video_url || "",
         });
       }
       setLoading(false);
     });
   }, []);
 
+  const missingPhoto = !form.avatar_url;
+  const missingVideo = !form.video_url;
+  const canSave = !missingPhoto && !missingVideo;
+
   const submit = async (e) => {
     e.preventDefault();
+    if (!canSave) {
+      toast.error("A profile photo and an intro video are both required before you can save.");
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await api.post("/profile/guide", {
@@ -61,7 +71,8 @@ export default function GuideProfileEdit() {
         bio: form.bio.trim(),
         languages: form.languages.split(",").map((x) => x.trim()).filter(Boolean),
         specialities: form.specialities.split(",").map((x) => x.trim()).filter(Boolean),
-        avatar_url: form.avatar_url.trim() || null,
+        avatar_url: form.avatar_url.trim(),
+        video_url: form.video_url.trim(),
       });
       setGuide(data.guide);
       toast.success(guide ? "Profile updated." : "Profile saved — now add at least one service on your dashboard to go live.");
@@ -111,11 +122,14 @@ export default function GuideProfileEdit() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const { data } = await api.post("/profile/guide/video", fd, {
+      // Plain storage upload — doesn't touch your saved profile yet. It only
+      // becomes part of your public profile (and enters review) once you hit
+      // "Save profile" below.
+      const { data } = await api.post("/upload/video", fd, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setGuide(data.guide);
-      toast.success("Video uploaded — it'll show on your profile once approved.");
+      setForm((f) => ({ ...f, video_url: data.url }));
+      toast.success("Video uploaded — hit Save profile to submit it for review.");
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
     } finally {
@@ -124,23 +138,14 @@ export default function GuideProfileEdit() {
     }
   };
 
-  const removeVideo = async () => {
-    setVideoUploading(true);
-    try {
-      await api.delete("/profile/guide/video");
-      setGuide((g) => (g ? { ...g, video_url: null, video_approved: false, video_rejected: false, video_rejection_reason: null, video_status: "none" } : g));
-      toast.success("Video removed");
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || e.message);
-    } finally {
-      setVideoUploading(false);
-    }
-  };
-
   if (loading) return <div className="py-20 text-center text-stone-500">Loading…</div>;
 
   const verified = guide?.verified === true;
   const previewSrc = form.avatar_url ? absoluteUrl(form.avatar_url) : null;
+  // The saved video's moderation status only applies while the staged video
+  // matches what's actually saved — if they've picked a new file, the old
+  // approved/rejected badge would be misleading.
+  const videoUnchanged = guide?.video_url && guide.video_url === form.video_url;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10" data-testid="guide-profile-edit">
@@ -154,7 +159,7 @@ export default function GuideProfileEdit() {
           <CheckCircle2 className="h-5 w-5 mt-0.5 text-green-700" />
           <div className="text-sm text-green-900">
             <div className="font-medium">Almost done!</div>
-            <div>Add your bio, photo, and expertise here, then list your bite-sized experiences on your dashboard. You'll go live as <span className="font-semibold">Unverified</span> until you complete 3 trips (or an admin verifies you).</div>
+            <div>Add your bio, photo, video, and expertise here, then list your bite-sized experiences on your dashboard. You'll go live as <span className="font-semibold">Unverified</span> until you complete 3 trips (or an admin verifies you).</div>
           </div>
         </div>
       )}
@@ -177,9 +182,9 @@ export default function GuideProfileEdit() {
       <form onSubmit={submit} className="mt-8 space-y-5">
         {/* PHOTO UPLOAD */}
         <div>
-          <Label>Profile photo</Label>
+          <Label>Profile photo <span className="text-red-600 font-normal">*required</span></Label>
           <div className="mt-2 flex items-center gap-4">
-            <div className="h-20 w-20 overflow-hidden rounded-full bg-stone-100 ring-1 ring-stone-200">
+            <div className={`h-20 w-20 overflow-hidden rounded-full bg-stone-100 ring-1 ${missingPhoto ? "ring-red-300" : "ring-stone-200"}`}>
               {previewSrc ? (
                 <img src={previewSrc} alt="" className="h-full w-full object-cover" data-testid="avatar-preview" />
               ) : (
@@ -207,18 +212,26 @@ export default function GuideProfileEdit() {
                 {uploading ? "Uploading…" : previewSrc ? "Replace photo" : "Upload photo"}
               </Button>
               <p className="mt-1.5 text-xs text-stone-500">JPG / PNG / WEBP up to 5MB.</p>
+              {missingPhoto && <p className="mt-1 text-xs text-red-600" data-testid="photo-missing-hint">A profile photo is required.</p>}
             </div>
           </div>
         </div>
 
         {/* INTRO VIDEO */}
         <div>
-          <Label>Intro video <span className="text-stone-400 font-normal">(optional)</span></Label>
+          <Label>Intro video <span className="text-red-600 font-normal">*required</span></Label>
           <p className="mt-1 text-xs text-stone-500">
             A short video of yourself builds trust with travellers. Every upload is reviewed by our team before it goes live.
           </p>
 
-          {guide?.video_url && (
+          <div className="mt-3 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-700 shrink-0" />
+            <p className="text-xs text-amber-900 leading-relaxed">
+              Your video must show <span className="font-medium">you, speaking, introducing yourself and the experience(s) you offer</span> — not random footage, stock clips, or anything unrelated. Accounts found uploading random or obscene content will be <span className="font-medium">permanently blocked from LKK</span>.
+            </p>
+          </div>
+
+          {videoUnchanged && (
             <div className="mt-3 flex items-center gap-2">
               {guide.video_status === "approved" && (
                 <Badge data-testid="video-status-approved" className="bg-green-800 text-white hover:bg-green-800 gap-1">
@@ -237,17 +250,24 @@ export default function GuideProfileEdit() {
               )}
             </div>
           )}
+          {!videoUnchanged && form.video_url && (
+            <div className="mt-3">
+              <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-900 gap-1" data-testid="video-status-unsaved">
+                New video ready — hit Save profile to submit for review
+              </Badge>
+            </div>
+          )}
 
-          {guide?.video_status === "rejected" && guide?.video_rejection_reason && (
+          {videoUnchanged && guide?.video_status === "rejected" && guide?.video_rejection_reason && (
             <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" data-testid="video-rejection-reason">
               {guide.video_rejection_reason}
             </div>
           )}
 
           <div className="mt-3 flex items-start gap-4">
-            <div className="h-24 w-40 overflow-hidden rounded-xl bg-stone-100 ring-1 ring-stone-200 grid place-items-center">
-              {guide?.video_url ? (
-                <video src={guide.video_url} className="h-full w-full object-cover" muted controls data-testid="video-preview" />
+            <div className={`h-24 w-40 overflow-hidden rounded-xl bg-stone-100 ring-1 ${missingVideo ? "ring-red-300" : "ring-stone-200"} grid place-items-center`}>
+              {form.video_url ? (
+                <video src={form.video_url} className="h-full w-full object-cover" muted controls data-testid="video-preview" />
               ) : (
                 <Video className="h-8 w-8 text-stone-300" />
               )}
@@ -261,32 +281,19 @@ export default function GuideProfileEdit() {
                 className="hidden"
                 data-testid="video-file-input"
               />
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => guide ? videoFileRef.current?.click() : toast.error("Save your profile first, then add a video")}
-                  disabled={videoUploading}
-                  data-testid="video-upload-btn"
-                  className="border-stone-300"
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  {videoUploading ? "Uploading…" : guide?.video_url ? "Replace video" : "Upload video"}
-                </Button>
-                {guide?.video_url && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={removeVideo}
-                    disabled={videoUploading}
-                    data-testid="video-remove-btn"
-                    className="border-red-200 text-red-700 hover:bg-red-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => videoFileRef.current?.click()}
+                disabled={videoUploading}
+                data-testid="video-upload-btn"
+                className="border-stone-300"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                {videoUploading ? "Uploading…" : form.video_url ? "Replace video" : "Upload video"}
+              </Button>
               <p className="mt-1.5 text-xs text-stone-500">MP4 / MOV / WEBM up to 50MB.</p>
+              {missingVideo && <p className="mt-1 text-xs text-red-600" data-testid="video-missing-hint">An intro video is required.</p>}
             </div>
           </div>
         </div>
@@ -316,7 +323,12 @@ export default function GuideProfileEdit() {
           — each is 2–8 hours, priced from ₹499.
         </div>
 
-        <Button type="submit" data-testid="profile-save" disabled={saving} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white">
+        {!canSave && (
+          <p className="text-center text-sm text-red-600" data-testid="save-blocked-hint">
+            Add a profile photo and an intro video to save your profile.
+          </p>
+        )}
+        <Button type="submit" data-testid="profile-save" disabled={saving || !canSave} className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white disabled:opacity-40">
           {saving ? "Saving…" : "Save profile"}
         </Button>
       </form>
