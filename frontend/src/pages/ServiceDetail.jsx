@@ -115,6 +115,29 @@ export default function ServiceDetail() {
             </div>
           </div>
 
+          {/* Meet your local (intro video) */}
+          {service.guide_video_url && (
+            <div className="mt-6" data-testid="meet-your-local-section">
+              <h2 className="font-heading text-xl font-bold text-stone-900">Meet your local</h2>
+              <div className="mt-3 overflow-hidden rounded-xl border border-stone-200 bg-black">
+                <video
+                  data-testid="guide-intro-video"
+                  src={service.guide_video_url}
+                  poster={service.guide_avatar_url || undefined}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="w-full max-h-[420px] bg-black"
+                >
+                  Your browser doesn't support embedded video.
+                </video>
+              </div>
+              <p className="mt-2 text-xs text-stone-400">
+                A short intro from {service.guide_name?.split(" ")[0]}, reviewed and approved by the LKK team.
+              </p>
+            </div>
+          )}
+
           {/* Cost breakdown */}
           <div className="mt-8">
             <h2 className="font-heading text-xl font-bold text-stone-900">What's included</h2>
