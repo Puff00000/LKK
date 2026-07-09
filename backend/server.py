@@ -172,8 +172,6 @@ async def get_current_user(
         user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", payload["sub"])
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    if user["is_banned"]:
-        raise HTTPException(status_code=403, detail="This account has been suspended. Contact support if you believe this is a mistake.")
     return row_to_dict(user)
 
 def require_role(*roles: str):
@@ -208,8 +206,7 @@ class GuideProfileIn(BaseModel):
     bio: str
     languages: List[str] = []
     specialities: List[str] = []
-    avatar_url: str = Field(min_length=1)
-    video_url: str = Field(min_length=1)
+    avatar_url: Optional[str] = None
 
 class ServiceIn(BaseModel):
     title: str = Field(min_length=1, max_length=120)
@@ -473,8 +470,6 @@ async def login(body: LoginIn):
         user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    if user["is_banned"]:
-        raise HTTPException(status_code=403, detail="This account has been suspended. Contact support if you believe this is a mistake.")
     user_dict = row_to_dict(user)
     token = create_token(str(user["id"]), user["email"], user["role"])
     return {"token": token, "user": public_user(user_dict)}
@@ -557,12 +552,8 @@ def video_status(guide: dict) -> str:
         return "rejected"
     return "pending"
 
-@api.post("/upload/video")
-async def upload_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
-    """Plain storage upload — mirrors /upload for photos. Does NOT touch the guides
-    table; the returned URL is only persisted (and only then enters moderation as
-    'pending') once the full profile is saved via POST /profile/guide. This lets a
-    local upload their photo+video before a guide row even exists yet."""
+@api.post("/profile/guide/video")
+async def upload_guide_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
     if ext not in VIDEO_MIME_BY_EXT:
         raise HTTPException(status_code=400, detail="Only MP4/MOV/WEBM videos allowed")
@@ -570,18 +561,44 @@ async def upload_video(file: UploadFile = File(...), user: dict = Depends(requir
     data = await file.read()
     if len(data) > VIDEO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="Video too large (max 50MB)")
-    path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
-    public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
-    return {"url": public_url}
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=400, detail="Create your local profile before adding a video")
+        path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
+        public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
+        # New upload always resets moderation state back to pending review
+        await conn.execute(
+            """UPDATE guides SET video_url=$1, video_approved=FALSE, video_rejected=FALSE,
+               video_rejection_reason=NULL WHERE id=$2""",
+            public_url, str(guide["id"])
+        )
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(guide["id"]))
+    d = row_to_dict(guide)
+    d["id"] = str(d["id"])
+    d["user_id"] = str(d["user_id"])
+    d["video_status"] = video_status(d)
+    return {"guide": d}
+
+@api.delete("/profile/guide/video")
+async def delete_guide_video(user: dict = Depends(require_role("local"))):
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=404, detail="Guide profile not found")
+        await conn.execute(
+            """UPDATE guides SET video_url=NULL, video_approved=FALSE, video_rejected=FALSE,
+               video_rejection_reason=NULL WHERE id=$1""",
+            str(guide["id"])
+        )
+    return {"ok": True}
 
 @api.get("/admin/videos")
 async def admin_list_videos(status: Optional[str] = None, user: dict = Depends(require_role("admin"))):
     """status: pending | approved | rejected | None (all guides that have a video)"""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT g.*, u.is_banned AS user_is_banned, u.banned_reason AS user_banned_reason
-               FROM guides g JOIN users u ON u.id = g.user_id
-               WHERE g.video_url IS NOT NULL ORDER BY g.created_at DESC"""
+            "SELECT * FROM guides WHERE video_url IS NOT NULL ORDER BY created_at DESC"
         )
     result = []
     for row in rows:
@@ -636,23 +653,22 @@ async def list_guides(
     min_rating: Optional[float] = None,
     sort: Optional[str] = "rating",
 ):
-    query = """SELECT g.* FROM guides g JOIN users u ON u.id = g.user_id
-               WHERE g.is_complete = TRUE AND u.is_banned = FALSE"""
+    query = "SELECT * FROM guides WHERE is_complete = TRUE"
     params = []
     i = 1
     if city:
-        query += f" AND LOWER(g.city) = LOWER(${i})"
+        query += f" AND LOWER(city) = LOWER(${i})"
         params.append(city)
         i += 1
     if min_rating is not None:
-        query += f" AND g.rating >= ${i}"
+        query += f" AND rating >= ${i}"
         params.append(min_rating)
         i += 1
     sort_map = {
-        "rating": "g.rating DESC",
-        "newest": "g.created_at DESC",
+        "rating": "rating DESC",
+        "newest": "created_at DESC",
     }
-    query += f" ORDER BY {sort_map.get(sort or 'rating', 'g.rating DESC')}"
+    query += f" ORDER BY {sort_map.get(sort or 'rating', 'rating DESC')}"
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(query, *params)
     result = []
@@ -666,20 +682,13 @@ async def list_guides(
 @api.get("/guides/cities")
 async def list_cities():
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT DISTINCT g.city FROM guides g JOIN users u ON u.id = g.user_id
-               WHERE g.is_complete = TRUE AND u.is_banned = FALSE ORDER BY g.city"""
-        )
+        rows = await conn.fetch("SELECT DISTINCT city FROM guides WHERE is_complete = TRUE ORDER BY city")
     return [row["city"] for row in rows]
 
 @api.get("/guides/{guide_id}")
 async def get_guide(guide_id: str):
     async with db_pool.acquire() as conn:
-        guide = await conn.fetchrow(
-            """SELECT g.* FROM guides g JOIN users u ON u.id = g.user_id
-               WHERE g.id = $1 AND u.is_banned = FALSE""",
-            guide_id
-        )
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
         if not guide:
             raise HTTPException(status_code=404, detail="Guide not found")
         reviews = await conn.fetch(
@@ -724,36 +733,24 @@ async def _refresh_guide_completeness(conn, guide_id: str) -> None:
 
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
-    if not body.avatar_url.strip() or not body.video_url.strip():
-        raise HTTPException(status_code=400, detail="A profile photo and an intro video are both required to save your profile")
     async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT id, video_url FROM guides WHERE user_id = $1", str(user["id"]))
+        existing = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
         if existing:
-            video_changed = existing["video_url"] != body.video_url
-            if video_changed:
-                await conn.execute(
-                    """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
-                       avatar_url=$5, video_url=$6, video_approved=FALSE, video_rejected=FALSE,
-                       video_rejection_reason=NULL WHERE user_id=$7""",
-                    body.city, body.bio, body.languages, body.specialities,
-                    body.avatar_url, body.video_url, str(user["id"])
-                )
-            else:
-                await conn.execute(
-                    """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
-                       avatar_url=$5 WHERE user_id=$6""",
-                    body.city, body.bio, body.languages, body.specialities,
-                    body.avatar_url, str(user["id"])
-                )
+            await conn.execute(
+                """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
+                   avatar_url=$5 WHERE user_id=$6""",
+                body.city, body.bio, body.languages, body.specialities,
+                body.avatar_url, str(user["id"])
+            )
             guide_id = str(existing["id"])
         else:
             guide_id = str(uuid.uuid4())
             await conn.execute(
                 """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
-                   avatar_url, video_url, rating, review_count, is_complete, verified, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                   avatar_url, rating, review_count, is_complete, verified, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
                 guide_id, str(user["id"]), user["name"], body.city, body.bio,
-                body.languages, body.specialities, body.avatar_url, body.video_url,
+                body.languages, body.specialities, body.avatar_url,
                 0.0, 0, False, False, datetime.now(timezone.utc)
             )
         await _refresh_guide_completeness(conn, guide_id)
@@ -782,8 +779,8 @@ async def list_services(
 ):
     query = """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
                g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified
-               FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
-               WHERE s.is_active = TRUE AND g.is_complete = TRUE AND u.is_banned = FALSE"""
+               FROM services s JOIN guides g ON g.id = s.guide_id
+               WHERE s.is_active = TRUE AND g.is_complete = TRUE"""
     params = []
     i = 1
     if city:
@@ -829,22 +826,23 @@ async def get_service(service_id: str):
         row = await conn.fetchrow(
             """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
                g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified,
-               g.bio AS guide_bio
-               FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
-               WHERE s.id = $1 AND u.is_banned = FALSE""",
+               g.bio AS guide_bio, g.video_url AS guide_video_url, g.video_approved AS guide_video_approved
+               FROM services s JOIN guides g ON g.id = s.guide_id WHERE s.id = $1""",
             service_id
         )
     if not row:
         raise HTTPException(status_code=404, detail="Service not found")
-    return _service_out(row)
+    out = _service_out(row)
+    # Only ever surface a video publicly once an admin has approved it
+    if not out.get("guide_video_approved"):
+        out["guide_video_url"] = None
+    return out
 
 @api.get("/guides/{guide_id}/services")
 async def list_guide_services(guide_id: str):
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT s.* FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
-               WHERE s.guide_id = $1 AND u.is_banned = FALSE ORDER BY s.created_at ASC""",
-            guide_id
+            "SELECT * FROM services WHERE guide_id = $1 ORDER BY created_at ASC", guide_id
         )
     return [_service_out(r) for r in rows]
 
@@ -854,6 +852,11 @@ async def create_service(body: ServiceIn, user: dict = Depends(require_role("loc
         guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
         if not guide:
             raise HTTPException(status_code=400, detail="Create your local profile before adding services")
+        if not guide["video_approved"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload your intro video and get it approved by an admin before you can list a service."
+            )
         price = compute_service_price(body.duration_hours)
         service_id = str(uuid.uuid4())
         await conn.execute(
@@ -1229,40 +1232,8 @@ async def post_review(booking_id: str, body: ReviewIn, user: dict = Depends(requ
 @api.get("/admin/users")
 async def admin_users(user: dict = Depends(require_role("admin"))):
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id,email,name,role,phone,city,phone_verified,created_at,
-               is_banned,banned_reason,banned_at FROM users ORDER BY created_at DESC LIMIT 500"""
-        )
+        rows = await conn.fetch("SELECT id,email,name,role,phone,city,phone_verified,created_at FROM users ORDER BY created_at DESC LIMIT 500")
     return rows_to_list(rows)
-
-class BanIn(BaseModel):
-    reason: str = Field(min_length=1)
-
-@api.post("/admin/users/{user_id}/ban")
-async def ban_user(user_id: str, body: BanIn, admin: dict = Depends(require_role("admin"))):
-    async with db_pool.acquire() as conn:
-        target = await conn.fetchrow("SELECT id, role FROM users WHERE id = $1", user_id)
-        if not target:
-            raise HTTPException(status_code=404, detail="User not found")
-        if target["role"] == "admin":
-            raise HTTPException(status_code=400, detail="Can't ban an admin account")
-        await conn.execute(
-            "UPDATE users SET is_banned=TRUE, banned_reason=$1, banned_at=$2 WHERE id=$3",
-            body.reason.strip(), datetime.now(timezone.utc), user_id
-        )
-    return {"ok": True}
-
-@api.post("/admin/users/{user_id}/unban")
-async def unban_user(user_id: str, admin: dict = Depends(require_role("admin"))):
-    async with db_pool.acquire() as conn:
-        target = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
-        if not target:
-            raise HTTPException(status_code=404, detail="User not found")
-        await conn.execute(
-            "UPDATE users SET is_banned=FALSE, banned_reason=NULL, banned_at=NULL WHERE id=$1",
-            user_id
-        )
-    return {"ok": True}
 
 @api.get("/admin/bookings")
 async def admin_bookings(user: dict = Depends(require_role("admin"))):
