@@ -3,7 +3,7 @@ import { api, inr } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock, Ban, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_COLORS = {
@@ -30,6 +30,7 @@ export default function AdminPanel() {
   const [videos, setVideos] = useState([]);
   const [videoFilter, setVideoFilter] = useState("pending");
   const [rejectReasons, setRejectReasons] = useState({});
+  const [banReasons, setBanReasons] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -99,6 +100,38 @@ export default function AdminPanel() {
       load();
     } catch (e) {
       toast.error("Failed to review video");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleBan = async (userId, key, explicitReason) => {
+    const reason = (explicitReason ?? banReasons[key])?.trim();
+    if (!reason) {
+      toast.error("Add a reason before banning");
+      return;
+    }
+    setActing(key);
+    try {
+      await api.post(`/admin/users/${userId}/ban`, { reason });
+      toast.success("User banned — their profile is now hidden and they can't log in");
+      setBanReasons((r) => ({ ...r, [key]: "" }));
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to ban user");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleUnban = async (userId, key) => {
+    setActing(key);
+    try {
+      await api.post(`/admin/users/${userId}/unban`);
+      toast.success("User unbanned");
+      load();
+    } catch (e) {
+      toast.error("Failed to unban user");
     } finally {
       setActing(null);
     }
@@ -248,6 +281,11 @@ export default function AdminPanel() {
                     <div className="flex items-center gap-2">
                       <div className="font-medium text-stone-900">{g.name}</div>
                       <span className="text-xs text-stone-400">{g.city}</span>
+                      {g.user_is_banned && (
+                        <Badge className="bg-stone-900 text-white hover:bg-stone-900 gap-1">
+                          <Ban className="h-3.5 w-3.5" /> Banned
+                        </Badge>
+                      )}
                       {g.video_status === "approved" && (
                         <Badge className="bg-green-800 text-white hover:bg-green-800 gap-1">
                           <CheckCircle2 className="h-3.5 w-3.5" /> Approved
@@ -307,6 +345,39 @@ export default function AdminPanel() {
                         </Button>
                       </div>
                     )}
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
+                      {g.user_is_banned ? (
+                        <Button
+                          onClick={() => handleUnban(g.user_id, `unban-${g.id}`)}
+                          disabled={acting === `unban-${g.id}`}
+                          variant="outline"
+                          className="border-stone-300 h-9 text-xs"
+                          data-testid={`unban-user-${g.id}`}
+                        >
+                          <ShieldOff className="mr-1.5 h-3.5 w-3.5" /> Unban this user
+                        </Button>
+                      ) : (
+                        <>
+                          <Input
+                            value={banReasons[`ban-${g.id}`] || ""}
+                            onChange={(e) => setBanReasons((r) => ({ ...r, [`ban-${g.id}`]: e.target.value }))}
+                            placeholder="Reason (e.g. obscene/random content)"
+                            className="h-9 text-xs w-64"
+                            data-testid={`ban-reason-${g.id}`}
+                          />
+                          <Button
+                            onClick={() => handleBan(g.user_id, `ban-${g.id}`)}
+                            disabled={acting === `ban-${g.id}`}
+                            variant="outline"
+                            className="border-stone-900 text-stone-900 hover:bg-stone-900 hover:text-white h-9 text-xs"
+                            data-testid={`ban-user-${g.id}`}
+                          >
+                            <Ban className="mr-1.5 h-3.5 w-3.5" /> Ban user
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -406,7 +477,7 @@ export default function AdminPanel() {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 border-b border-stone-200">
                 <tr>
-                  {["Name", "Phone", "Email", "Role", "Joined"].map((h) => (
+                  {["Name", "Phone", "Email", "Role", "Status", "Joined", ""].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-stone-500 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -422,8 +493,49 @@ export default function AdminPanel() {
                         {u.role}
                       </Badge>
                     </td>
+                    <td className="px-4 py-3">
+                      {u.is_banned ? (
+                        <Badge className="bg-stone-900 text-white hover:bg-stone-900 gap-1">
+                          <Ban className="h-3.5 w-3.5" /> Banned
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-stone-400">Active</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-stone-400 text-xs">
                       {new Date(u.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                    </td>
+                    <td className="px-4 py-3">
+                      {u.role !== "admin" && (
+                        u.is_banned ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleUnban(u.id, `unban-user-${u.id}`)}
+                            disabled={acting === `unban-user-${u.id}`}
+                            className="border-stone-300 h-8 text-xs"
+                            data-testid={`unban-${u.id}`}
+                          >
+                            Unban
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const reason = window.prompt("Reason for banning this user?");
+                              if (reason && reason.trim()) {
+                                handleBan(u.id, `user-${u.id}`, reason.trim());
+                              }
+                            }}
+                            disabled={acting === `user-${u.id}`}
+                            className="border-red-200 text-red-700 hover:bg-red-50 h-8 text-xs"
+                            data-testid={`ban-${u.id}`}
+                          >
+                            Ban
+                          </Button>
+                        )
+                      )}
                     </td>
                   </tr>
                 ))}
