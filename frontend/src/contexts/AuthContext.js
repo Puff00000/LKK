@@ -8,7 +8,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const token = localStorage.getItem("localink_token");
+    const token = localStorage.getItem("lkk_token");
     if (!token) {
       setUser(null);
       setLoading(false);
@@ -18,7 +18,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.get("/auth/me");
       setUser(data.user);
     } catch {
-      localStorage.removeItem("localink_token");
+      localStorage.removeItem("lkk_token");
       setUser(null);
     } finally {
       setLoading(false);
@@ -32,7 +32,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     try {
       const { data } = await api.post("/auth/login", { email, password });
-      localStorage.setItem("localink_token", data.token);
+      localStorage.setItem("lkk_token", data.token);
       setUser(data.user);
       return { ok: true, user: data.user };
     } catch (e) {
@@ -43,7 +43,7 @@ export function AuthProvider({ children }) {
   const register = async (payload) => {
     try {
       const { data } = await api.post("/auth/register", payload);
-      localStorage.setItem("localink_token", data.token);
+      localStorage.setItem("lkk_token", data.token);
       setUser(data.user);
       return { ok: true, user: data.user };
     } catch (e) {
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    localStorage.removeItem("localink_token");
+    localStorage.removeItem("lkk_token");
     setUser(null);
   };
 
