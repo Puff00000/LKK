@@ -5,7 +5,7 @@ export const API_URL = `${process.env.REACT_APP_BACKEND_URL}/api`;
 export const api = axios.create({ baseURL: API_URL });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("localink_token");
+  const token = localStorage.getItem("lkk_token");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
