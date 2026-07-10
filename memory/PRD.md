@@ -1,4 +1,4 @@
-# Localink — PRD
+# LKK — PRD
 
 ## Problem statement
 Two-sided marketplace connecting Indian domestic travellers with verified local guides in their destination city. Travellers book a package (₹499–₹1999), locals deliver a custom itinerary + chat support, with optional in-person meetup.
@@ -6,7 +6,7 @@ Two-sided marketplace connecting Indian domestic travellers with verified local 
 ## User personas
 - **Traveller** — Indian domestic tourist who wants to skip generic tours and travel with a real local.
 - **Local guide** — Resident of a tourist city who wants to monetize their local knowledge.
-- **Admin** — Localink operations staff handling disputes and oversight.
+- **Admin** — LKK operations staff handling disputes and oversight.
 
 ## Stack
 - **Backend**: FastAPI + MongoDB (Motor) + PyJWT + bcrypt
