@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Navbar from "@/components/Navbar";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import RequireGuideProfile from "@/components/RequireGuideProfile";
 import Landing from "@/pages/Landing";
 import CreateTrip from "@/pages/CreateTrip";
 import TripDates from "@/pages/TripDates";
@@ -60,7 +61,9 @@ export default function App() {
               path="/local"
               element={
                 <ProtectedRoute roles={["local"]}>
-                  <LocalDashboard />
+                  <RequireGuideProfile>
+                    <LocalDashboard />
+                  </RequireGuideProfile>
                 </ProtectedRoute>
               }
             />
