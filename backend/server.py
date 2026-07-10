@@ -1445,9 +1445,18 @@ app.include_router(api)
 # Render — never fall back to "*", since that combined with allow_credentials=True
 # lets any website make authenticated requests to this API from a user's browser.
 _default_cors_origins = "https://www.lkk.co.in,https://lkk.co.in,http://localhost:3000"
+
+# Vercel preview deployments get a fresh URL per branch/commit, e.g.
+# https://lkk-kmk5-git-some-branch-yourusername.vercel.app — these can't be
+# listed as exact strings in CORS_ORIGINS, so match the project's URL pattern
+# with a regex instead. This covers the production URL (lkk-kmk5.vercel.app)
+# and every preview variant, but nothing outside the lkk-kmk5 Vercel project.
+_vercel_preview_regex = r"^https://lkk-kmk5(-[a-zA-Z0-9-]+)?\.vercel\.app$"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("CORS_ORIGINS", _default_cors_origins).split(","),
+    allow_origin_regex=_vercel_preview_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
