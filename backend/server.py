@@ -20,6 +20,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 import asyncpg
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 
 # --- Config ----------------------------------------------------------------
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -52,6 +57,8 @@ def compute_service_price(duration_hours: int) -> int:
     return SERVICE_BASE_PRICE + (duration_hours - SERVICE_BASE_HOURS) * SERVICE_HOURLY_RATE
 
 app = FastAPI(title="LKK API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -266,7 +273,7 @@ class DisputeIn(BaseModel):
 # --- Startup ---------------------------------------------------------------
 DEMO_LOCALS = [
     {
-        "email": "aarav.jaipur@localink.in",
+        "email": "aarav.jaipur@lkk.co.in",
         "name": "Aarav Singh",
         "city": "Jaipur",
         "bio": "Born and raised in the pink city. I'll show you the hidden havelis, secret rooftop chai spots, and the best laal maas in town.",
@@ -275,7 +282,7 @@ DEMO_LOCALS = [
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Aarav&backgroundColor=166534",
     },
     {
-        "email": "meera.goa@localink.in",
+        "email": "meera.goa@lkk.co.in",
         "name": "Meera D'Souza",
         "city": "Goa",
         "bio": "Goan Catholic, beach-side café owner, and surfer. Skip the tourist traps — I'll take you to fishermen coves and the live music joints locals love.",
@@ -284,7 +291,7 @@ DEMO_LOCALS = [
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Meera&backgroundColor=166534",
     },
     {
-        "email": "tenzin.manali@localink.in",
+        "email": "tenzin.manali@lkk.co.in",
         "name": "Tenzin Norbu",
         "city": "Manali",
         "bio": "Mountain guide for 12 years. Day hikes, monastery visits, and the warmest Tibetan thukpa you'll ever taste.",
@@ -293,7 +300,7 @@ DEMO_LOCALS = [
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Tenzin&backgroundColor=166534",
     },
     {
-        "email": "kavya.varanasi@localink.in",
+        "email": "kavya.varanasi@lkk.co.in",
         "name": "Kavya Mishra",
         "city": "Varanasi",
         "bio": "Sanskrit scholar and ghat-side storyteller. Sunrise boat rides, evening aarti, and the philosophy of the old city.",
@@ -302,7 +309,7 @@ DEMO_LOCALS = [
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Kavya&backgroundColor=166534",
     },
     {
-        "email": "rohan.bangalore@localink.in",
+        "email": "rohan.bangalore@lkk.co.in",
         "name": "Rohan Iyer",
         "city": "Bangalore",
         "bio": "Tech worker by day, craft beer & filter coffee guide by weekend. I'll show you the city beyond the malls.",
@@ -311,7 +318,7 @@ DEMO_LOCALS = [
         "avatar_url": "https://api.dicebear.com/7.x/initials/svg?seed=Rohan&backgroundColor=166534",
     },
     {
-        "email": "priya.udaipur@localink.in",
+        "email": "priya.udaipur@lkk.co.in",
         "name": "Priya Rathore",
         "city": "Udaipur",
         "bio": "I run a small art school overlooking Lake Pichola. Miniature painting workshops, palace tours, and quiet boat rides at golden hour.",
@@ -379,7 +386,7 @@ async def on_startup() -> None:
     await seed_demo_data()
 
 async def seed_admin() -> None:
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@localink.in")
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@lkk.co.in")
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM users WHERE email = $1", admin_email)
@@ -387,7 +394,7 @@ async def seed_admin() -> None:
             await conn.execute(
                 """INSERT INTO users (id, email, name, role, password_hash, created_at)
                    VALUES ($1, $2, $3, $4, $5, $6)""",
-                str(uuid.uuid4()), admin_email, "Localink Admin", "admin",
+                str(uuid.uuid4()), admin_email, "LKK Admin", "admin",
                 hash_password(admin_password), datetime.now(timezone.utc)
             )
             logger.info("Seeded admin: %s", admin_email)
@@ -438,7 +445,8 @@ async def shutdown() -> None:
 
 # --- Auth endpoints --------------------------------------------------------
 @api.post("/auth/register")
-async def register(body: RegisterIn):
+@limiter.limit("10/hour")
+async def register(request: Request, body: RegisterIn):
     email = body.email.lower()
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
@@ -464,7 +472,8 @@ async def register(body: RegisterIn):
     return {"token": token, "user": public_user(row_to_dict(user))}
 
 @api.post("/auth/login")
-async def login(body: LoginIn):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginIn):
     email = body.email.lower()
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
@@ -1308,7 +1317,8 @@ class ResetPasswordIn(BaseModel):
     new_password: str = Field(min_length=6)
 
 @api.post("/auth/forgot-password")
-async def forgot_password(body: ForgotPasswordIn):
+@limiter.limit("5/hour")
+async def forgot_password(request: Request, body: ForgotPasswordIn):
     email = body.email.lower()
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
@@ -1348,7 +1358,8 @@ async def forgot_password(body: ForgotPasswordIn):
 
 
 @api.post("/auth/reset-password")
-async def reset_password(body: ResetPasswordIn):
+@limiter.limit("10/hour")
+async def reset_password(request: Request, body: ResetPasswordIn):
     async with db_pool.acquire() as conn:
         reset = await conn.fetchrow(
             "SELECT * FROM password_resets WHERE token = $1 AND used = FALSE",
@@ -1430,9 +1441,13 @@ async def root():
 
 app.include_router(api)
 
+# Default to the known production frontend origins if CORS_ORIGINS isn't set on
+# Render — never fall back to "*", since that combined with allow_credentials=True
+# lets any website make authenticated requests to this API from a user's browser.
+_default_cors_origins = "https://www.lkk.co.in,https://lkk.co.in,http://localhost:3000"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=os.environ.get("CORS_ORIGINS", _default_cors_origins).split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
