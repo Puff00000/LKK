@@ -1,10 +1,10 @@
-# Localink Auth Testing
+# LKK Auth Testing
 
 ## Auth flow (Bearer token, no cookies)
 - `POST /api/auth/register` → `{ token, user }`
 - `POST /api/auth/login` → `{ token, user }`
 - `GET /api/auth/me` → `{ user }` (requires `Authorization: Bearer <token>`)
-- Token is stored in `localStorage["localink_token"]` on frontend.
+- Token is stored in `localStorage["lkk_token"]` on frontend.
 
 ## Test
 ```bash
