@@ -1,4 +1,4 @@
-"""End-to-end pytest suite for Localink backend APIs."""
+"""End-to-end pytest suite for LKK backend APIs."""
 import os
 import uuid
 import time
@@ -8,9 +8,9 @@ import requests
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL") or open("/app/frontend/.env").read().split("REACT_APP_BACKEND_URL=")[1].split("\n")[0].strip()
 API = f"{BASE_URL.rstrip('/')}/api"
 
-ADMIN_EMAIL = "admin@localink.in"
+ADMIN_EMAIL = "admin@lkk.co.in"
 ADMIN_PASSWORD = "Admin@123"
-LOCAL_EMAIL = "aarav.jaipur@localink.in"
+LOCAL_EMAIL = "aarav.jaipur@lkk.co.in"
 LOCAL_PASSWORD = "Local@123"
 
 
@@ -31,7 +31,7 @@ def state(session):
 def test_health(session):
     r = session.get(f"{API}/")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "service": "localink"}
+    assert r.json() == {"ok": True, "service": "lkk"}
 
 
 # --- Auth ---
