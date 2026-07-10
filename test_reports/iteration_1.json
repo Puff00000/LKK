@@ -1,5 +1,5 @@
 {
-  "summary": "First end-to-end test of Localink. Backend pytest: 28/28 passed covering auth, guides, full booking lifecycle (create → pay → deliver itinerary → confirm → review), polling chat, role enforcement, disputes, and admin endpoints. Frontend Playwright: landing, browse with filters/search, guide profile, login-redirect-on-book, traveller register, 2-step booking flow, mock pay, booking detail, chat send/receive, local login + dashboard, itinerary delivery from local side, admin panel with tabs and stats — all working.",
+  "summary": "First end-to-end test of LKK. Backend pytest: 28/28 passed covering auth, guides, full booking lifecycle (create → pay → deliver itinerary → confirm → review), polling chat, role enforcement, disputes, and admin endpoints. Frontend Playwright: landing, browse with filters/search, guide profile, login-redirect-on-book, traveller register, 2-step booking flow, mock pay, booking detail, chat send/receive, local login + dashboard, itinerary delivery from local side, admin panel with tabs and stats — all working.",
   "backend_issues": {
     "critical": [],
     "minor": [
@@ -15,7 +15,7 @@
     ]
   },
   "test_report_links": [
-    "/app/backend/tests/test_localink_api.py",
+    "/app/backend/tests/test_lkk_api.py",
     "/app/test_reports/pytest/pytest_results.xml"
   ],
   "action_items": [
@@ -33,13 +33,13 @@
     "Role enforcement is consistent and correct across all booking endpoints (verified by tests)."
   ],
   "updated_files": [
-    "/app/backend/tests/test_localink_api.py (new)"
+    "/app/backend/tests/test_lkk_api.py (new)"
   ],
   "success_rate": {"backend": "100% (28/28)", "frontend": "100% of tested flows"},
-  "test_credentials": "Admin: admin@localink.in / Admin@123. Demo locals: aarav.jaipur@localink.in / Local@123 (and 5 others). Test traveller registered dynamically in tests.",
+  "test_credentials": "Admin and demo local credentials are not recorded here — see Render env vars / your password manager. Test traveller registered dynamically in tests.",
   "seed_data_creation": "Tests register a fresh TEST_ traveller and TEST_ local each run; create a Delhi guide profile via the new local; create 3 bookings on Aarav's profile (one completed+reviewed, one cancelled-via-dispute, one pending). These persist in MongoDB.",
   "retest_needed": false,
   "main_agent_can_self_test": true,
-  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_localink_api.py is order-dependent (uses a session-scoped state dict). Run as a whole file, not individual tests. Email lowercasing is enforced server-side. Demo seed only runs when guides collection is empty — clear DB to re-seed exactly 6 guides. All chat polling tests work via direct API calls (no need to wait for the 4-second frontend poll on backend tests).",
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_lkk_api.py is order-dependent (uses a session-scoped state dict). Run as a whole file, not individual tests. Email lowercasing is enforced server-side. Demo seed only runs when guides collection is empty — clear DB to re-seed exactly 6 guides. All chat polling tests work via direct API calls (no need to wait for the 4-second frontend poll on backend tests).",
   "rca of the issue": "N/A — no failing functionality. Initial pytest run had 15 failures all stemming from one root cause: backend lowercases the registration email but test assertion compared against the original-case email. Fixed by lowercasing the test email before submission."
 }
