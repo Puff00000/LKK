@@ -34,6 +34,7 @@ export default function GuideProfileEdit() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [videoUploading, setVideoUploading] = useState(false);
+  const [videoUploadPct, setVideoUploadPct] = useState(0);
   const fileRef = useRef(null);
   const videoFileRef = useRef(null);
 
@@ -93,11 +94,16 @@ export default function GuideProfileEdit() {
       fd.append("file", file);
       const { data } = await api.post("/upload", fd, {
         headers: { "Content-Type": "multipart/form-data" },
+        timeout: 60000,
       });
       setForm((f) => ({ ...f, avatar_url: data.url }));
       toast.success("Photo uploaded");
     } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+      if (e.code === "ECONNABORTED") {
+        toast.error("Upload timed out. Check your connection and try again.");
+      } else {
+        toast.error(formatApiError(e.response?.data?.detail) || e.message);
+      }
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -119,6 +125,7 @@ export default function GuideProfileEdit() {
       return;
     }
     setVideoUploading(true);
+    setVideoUploadPct(0);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -127,13 +134,22 @@ export default function GuideProfileEdit() {
       // "Save profile" below.
       const { data } = await api.post("/upload/video", fd, {
         headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000, // videos are bigger; give this more room than the photo upload
+        onUploadProgress: (evt) => {
+          if (evt.total) setVideoUploadPct(Math.round((evt.loaded / evt.total) * 100));
+        },
       });
       setForm((f) => ({ ...f, video_url: data.url }));
       toast.success("Video uploaded — hit Save profile to submit it for review.");
     } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+      if (e.code === "ECONNABORTED") {
+        toast.error("Video upload timed out. Try a smaller file or check your connection.");
+      } else {
+        toast.error(formatApiError(e.response?.data?.detail) || e.message);
+      }
     } finally {
       setVideoUploading(false);
+      setVideoUploadPct(0);
       if (videoFileRef.current) videoFileRef.current.value = "";
     }
   };
@@ -290,7 +306,7 @@ export default function GuideProfileEdit() {
                 className="border-stone-300"
               >
                 <Upload className="mr-2 h-4 w-4" />
-                {videoUploading ? "Uploading…" : form.video_url ? "Replace video" : "Upload video"}
+                {videoUploading ? `Uploading… ${videoUploadPct}%` : form.video_url ? "Replace video" : "Upload video"}
               </Button>
               <p className="mt-1.5 text-xs text-stone-500">MP4 / MOV / WEBM up to 50MB.</p>
               {missingVideo && <p className="mt-1 text-xs text-red-600" data-testid="video-missing-hint">An intro video is required.</p>}
