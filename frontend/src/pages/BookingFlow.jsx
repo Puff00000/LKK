@@ -13,6 +13,7 @@ import { CalendarIcon, ShieldCheck, Lock, Clock, LogIn, UserPlus } from "lucide-
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { getTripDraft, setTripDraft, getPendingBooking, setPendingBooking, clearPendingBooking } from "@/lib/tripDraft";
+import { openRazorpayCheckout } from "@/lib/razorpay";
 
 const TIME_SLOTS = [
   "6:00 AM", "7:00 AM", "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM",
@@ -108,15 +109,31 @@ export default function BookingFlow() {
     }
   };
 
-  const mockPay = async () => {
+  const payNow = async () => {
     setSubmitting(true);
     try {
-      await api.post(`/bookings/${booking.id}/pay`);
-      toast.success("Payment successful (mock). Your local has been notified.");
-      navigate(`/bookings/${booking.id}`);
+      const { data: order } = await api.post(`/bookings/${booking.id}/pay/create-order`);
+      await openRazorpayCheckout(
+        order,
+        async (result) => {
+          try {
+            await api.post(`/bookings/${booking.id}/pay/verify`, result);
+            toast.success("Payment successful! Your local has been notified.");
+            navigate(`/bookings/${booking.id}`);
+          } catch (e) {
+            toast.error(formatApiError(e.response?.data?.detail) || e.message);
+          } finally {
+            setSubmitting(false);
+          }
+        },
+        (err) => {
+          // Widget closed without paying, or payment failed client-side
+          if (err) toast.error(err.message);
+          setSubmitting(false);
+        }
+      );
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
-    } finally {
       setSubmitting(false);
     }
   };
@@ -212,16 +229,16 @@ export default function BookingFlow() {
             <span className="font-heading text-lg font-bold text-green-900">{inr(booking.amount)}</span>
           </div>
           <div className="rounded-lg border border-dashed border-stone-300 p-4 text-sm text-stone-500">
-            <div className="flex items-center gap-2 mb-2"><Lock className="h-4 w-4" /> Mock payment (no real card charged)</div>
-            This is a demo checkout — clicking below just marks the booking as paid.
+            <div className="flex items-center gap-2 mb-2"><Lock className="h-4 w-4" /> Secure payment via Razorpay</div>
+            Pay by card, UPI, netbanking, or wallet. Your local is only notified once payment is confirmed.
           </div>
           <Button
-            onClick={mockPay}
+            onClick={payNow}
             disabled={submitting}
             data-testid="booking-pay-btn"
             className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
           >
-            {submitting ? "Processing…" : `Pay ${inr(booking.amount)} (mock)`}
+            {submitting ? "Processing…" : `Pay ${inr(booking.amount)}`}
           </Button>
           <div className="flex items-center justify-center gap-2 text-xs text-stone-400">
             <ShieldCheck className="h-3.5 w-3.5" /> Held in escrow until you confirm the experience happened
