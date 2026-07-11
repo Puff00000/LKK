@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Send, Star, CheckCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { openRazorpayCheckout } from "@/lib/razorpay";
 
 const STATUS_LABEL = {
   pending_payment: "Awaiting payment",
@@ -88,12 +89,27 @@ export default function BookingDetail() {
   const payNow = async () => {
     setPaying(true);
     try {
-      await api.post(`/bookings/${id}/pay`);
-      toast.success("Payment successful (mock). Your local has been notified.");
-      loadAll();
+      const { data: order } = await api.post(`/bookings/${id}/pay/create-order`);
+      await openRazorpayCheckout(
+        order,
+        async (result) => {
+          try {
+            await api.post(`/bookings/${id}/pay/verify`, result);
+            toast.success("Payment successful! Your local has been notified.");
+            loadAll();
+          } catch (e) {
+            toast.error(formatApiError(e.response?.data?.detail) || e.message);
+          } finally {
+            setPaying(false);
+          }
+        },
+        (err) => {
+          if (err) toast.error(err.message);
+          setPaying(false);
+        }
+      );
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
-    } finally {
       setPaying(false);
     }
   };
@@ -163,7 +179,7 @@ export default function BookingDetail() {
                     data-testid="pay-now-btn"
                     className="mt-4 bg-green-800 text-white hover:bg-green-900 hover:text-white"
                   >
-                    {paying ? "Processing…" : `Pay ${inr(booking.amount)} (mock)`}
+                    {paying ? "Processing…" : `Pay ${inr(booking.amount)}`}
                   </Button>
                 )}
               </div>
