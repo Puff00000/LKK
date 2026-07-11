@@ -214,6 +214,7 @@ class GuideProfileIn(BaseModel):
     languages: List[str] = []
     specialities: List[str] = []
     avatar_url: Optional[str] = None
+    video_url: Optional[str] = None
 
 class ServiceIn(BaseModel):
     title: str = Field(min_length=1, max_length=120)
@@ -561,6 +562,25 @@ def video_status(guide: dict) -> str:
         return "rejected"
     return "pending"
 
+@api.post("/upload/video")
+async def upload_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
+    """Plain storage upload for the intro video — does NOT touch the guides
+    table or moderation state. Used by the profile edit page's two-step flow:
+    upload here to get a URL, preview it, then POST /profile/guide with that
+    url actually attaches it (and enters the review queue). This intentionally
+    doesn't require an existing guide row, since a first-time Local uploads
+    their video before their profile row exists yet."""
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
+    if ext not in VIDEO_MIME_BY_EXT:
+        raise HTTPException(status_code=400, detail="Only MP4, MOV, or WEBM videos are allowed")
+    content_type = VIDEO_MIME_BY_EXT[ext]
+    data = await file.read()
+    if len(data) > VIDEO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Video is too large (max 50MB)")
+    path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
+    public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
+    return {"url": public_url}
+
 @api.post("/profile/guide/video")
 async def upload_guide_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
@@ -742,24 +762,43 @@ async def _refresh_guide_completeness(conn, guide_id: str) -> None:
 
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
+    if not (body.avatar_url or "").strip() or not (body.video_url or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="A profile photo and an intro video are both required before you can save."
+        )
     async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
+        existing = await conn.fetchrow("SELECT id, video_url FROM guides WHERE user_id = $1", str(user["id"]))
+        incoming_video = (body.video_url or "").strip() or None
         if existing:
-            await conn.execute(
-                """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
-                   avatar_url=$5 WHERE user_id=$6""",
-                body.city, body.bio, body.languages, body.specialities,
-                body.avatar_url, str(user["id"])
-            )
+            video_changed = incoming_video != existing["video_url"]
+            if video_changed:
+                # A genuinely new/different video always re-enters the review
+                # queue. Re-saving the profile with the SAME video shouldn't
+                # reset an already-approved (or already-rejected) status.
+                await conn.execute(
+                    """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
+                       avatar_url=$5, video_url=$6, video_approved=FALSE, video_rejected=FALSE,
+                       video_rejection_reason=NULL WHERE user_id=$7""",
+                    body.city, body.bio, body.languages, body.specialities,
+                    body.avatar_url, incoming_video, str(user["id"])
+                )
+            else:
+                await conn.execute(
+                    """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
+                       avatar_url=$5 WHERE user_id=$6""",
+                    body.city, body.bio, body.languages, body.specialities,
+                    body.avatar_url, str(user["id"])
+                )
             guide_id = str(existing["id"])
         else:
             guide_id = str(uuid.uuid4())
             await conn.execute(
                 """INSERT INTO guides (id, user_id, name, city, bio, languages, specialities,
-                   avatar_url, rating, review_count, is_complete, verified, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                   avatar_url, video_url, rating, review_count, is_complete, verified, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
                 guide_id, str(user["id"]), user["name"], body.city, body.bio,
-                body.languages, body.specialities, body.avatar_url,
+                body.languages, body.specialities, body.avatar_url, incoming_video,
                 0.0, 0, False, False, datetime.now(timezone.utc)
             )
         await _refresh_guide_completeness(conn, guide_id)
