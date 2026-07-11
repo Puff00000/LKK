@@ -11,6 +11,10 @@ import logging
 import bcrypt
 import jwt
 import httpx
+import hmac
+import hashlib
+import base64
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
@@ -36,6 +40,13 @@ AUTO_VERIFY_AFTER_TRIPS = int(os.environ.get("AUTO_VERIFY_AFTER_TRIPS", "3"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+# The RazorpayX current account the ₹1 penny-drop test debit is issued from —
+# NOT the same thing as your API key. Found in the RazorpayX dashboard.
+RAZORPAY_X_ACCOUNT_NUMBER = os.environ.get("RAZORPAY_X_ACCOUNT_NUMBER", "")
+RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
 OTP_MOCK_CODE = "123456"
 
 # --- Service pricing ---------------------------------------------------
@@ -141,6 +152,107 @@ async def upload_to_supabase(path: str, data: bytes, content_type: str, bucket: 
         raise HTTPException(status_code=503, detail=f"Storage upload failed: {resp.text}")
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}"
     return public_url
+
+# --- Razorpay ----------------------------------------------------------
+# Traveller payments: real Razorpay Checkout (Orders API + signature verification).
+# Local bank verification: lightweight Fund Account Validation ("penny drop") —
+# a fraud-check only. Payouts to locals are still done manually outside Razorpay
+# by the platform owner; nothing here moves money to a local automatically.
+def _razorpay_auth_header() -> dict:
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=503, detail="Payments are not configured")
+    token = base64.b64encode(f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()).decode()
+    return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
+
+async def razorpay_create_order(amount_rupees: int, receipt: str, notes: dict) -> dict:
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{RAZORPAY_API_BASE}/orders",
+            headers=_razorpay_auth_header(),
+            json={
+                "amount": amount_rupees * 100,  # Razorpay uses paise
+                "currency": "INR",
+                "receipt": receipt,
+                "notes": notes,
+            },
+        )
+    if resp.status_code not in (200, 201):
+        logger.error("Razorpay order creation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Could not start payment. Please try again.")
+    return resp.json()
+
+def razorpay_verify_payment_signature(order_id: str, payment_id: str, signature: str) -> bool:
+    if not RAZORPAY_KEY_SECRET:
+        return False
+    body = f"{order_id}|{payment_id}".encode()
+    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+def razorpay_verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
+    if not RAZORPAY_WEBHOOK_SECRET or not signature:
+        return False
+    expected = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+async def razorpay_create_contact(name: str, email: str, reference_id: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{RAZORPAY_API_BASE}/contacts",
+            headers=_razorpay_auth_header(),
+            json={"name": name, "email": email, "type": "vendor", "reference_id": reference_id},
+        )
+    if resp.status_code not in (200, 201):
+        logger.error("Razorpay contact creation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Could not verify bank details right now. Please try again.")
+    return resp.json()["id"]
+
+async def razorpay_create_fund_account_bank(contact_id: str, name: str, account_number: str, ifsc: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{RAZORPAY_API_BASE}/fund_accounts",
+            headers=_razorpay_auth_header(),
+            json={
+                "contact_id": contact_id,
+                "account_type": "bank_account",
+                "bank_account": {"name": name, "ifsc": ifsc, "account_number": account_number},
+            },
+        )
+    if resp.status_code not in (200, 201):
+        logger.error("Razorpay fund account (bank) creation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Could not verify bank details right now. Please try again.")
+    return resp.json()["id"]
+
+async def razorpay_create_fund_account_vpa(contact_id: str, vpa: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{RAZORPAY_API_BASE}/fund_accounts",
+            headers=_razorpay_auth_header(),
+            json={"contact_id": contact_id, "account_type": "vpa", "vpa": {"address": vpa}},
+        )
+    if resp.status_code not in (200, 201):
+        logger.error("Razorpay fund account (vpa) creation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Could not verify UPI details right now. Please try again.")
+    return resp.json()["id"]
+
+async def razorpay_trigger_validation(fund_account_id: str) -> dict:
+    if not RAZORPAY_X_ACCOUNT_NUMBER:
+        raise HTTPException(status_code=503, detail="Bank verification is not configured yet")
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{RAZORPAY_API_BASE}/fund_accounts/validations",
+            headers=_razorpay_auth_header(),
+            json={
+                "account_number": RAZORPAY_X_ACCOUNT_NUMBER,
+                "fund_account": {"id": fund_account_id},
+                "amount": 100,  # ₹1 penny-drop, in paise
+                "currency": "INR",
+                "notes": {"purpose": "LKK local bank verification"},
+            },
+        )
+    if resp.status_code not in (200, 201):
+        logger.error("Razorpay fund account validation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Could not start bank verification right now. Please try again.")
+    return resp.json()
 # --- Email via Resend ------------------------------------------------------
 async def send_email(to: str, subject: str, html: str):
     if not RESEND_API_KEY:
@@ -179,6 +291,8 @@ async def get_current_user(
         user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", payload["sub"])
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if user["is_banned"]:
+        raise HTTPException(status_code=403, detail="Your account has been suspended. Contact support if you believe this is a mistake.")
     return row_to_dict(user)
 
 def require_role(*roles: str):
@@ -213,8 +327,8 @@ class GuideProfileIn(BaseModel):
     bio: str
     languages: List[str] = []
     specialities: List[str] = []
-    avatar_url: Optional[str] = None
-    video_url: Optional[str] = None
+    avatar_url: str = Field(min_length=1)
+    video_url: str = Field(min_length=1)
 
 class ServiceIn(BaseModel):
     title: str = Field(min_length=1, max_length=120)
@@ -480,6 +594,8 @@ async def login(request: Request, body: LoginIn):
         user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user["is_banned"]:
+        raise HTTPException(status_code=403, detail="Your account has been suspended. Contact support if you believe this is a mistake.")
     user_dict = row_to_dict(user)
     token = create_token(str(user["id"]), user["email"], user["role"])
     return {"token": token, "user": public_user(user_dict)}
@@ -564,25 +680,10 @@ def video_status(guide: dict) -> str:
 
 @api.post("/upload/video")
 async def upload_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
-    """Plain storage upload for the intro video — does NOT touch the guides
-    table or moderation state. Used by the profile edit page's two-step flow:
-    upload here to get a URL, preview it, then POST /profile/guide with that
-    url actually attaches it (and enters the review queue). This intentionally
-    doesn't require an existing guide row, since a first-time Local uploads
-    their video before their profile row exists yet."""
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
-    if ext not in VIDEO_MIME_BY_EXT:
-        raise HTTPException(status_code=400, detail="Only MP4, MOV, or WEBM videos are allowed")
-    content_type = VIDEO_MIME_BY_EXT[ext]
-    data = await file.read()
-    if len(data) > VIDEO_MAX_BYTES:
-        raise HTTPException(status_code=400, detail="Video is too large (max 50MB)")
-    path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
-    public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
-    return {"url": public_url}
-
-@api.post("/profile/guide/video")
-async def upload_guide_video(file: UploadFile = File(...), user: dict = Depends(require_role("local"))):
+    """Plain storage upload for a local's intro video — mirrors POST /upload for
+    photos. Does NOT touch the guides table or require a profile to already
+    exist; the video only becomes part of the public profile (and enters
+    moderation review) once it's included in a POST /profile/guide save."""
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
     if ext not in VIDEO_MIME_BY_EXT:
         raise HTTPException(status_code=400, detail="Only MP4/MOV/WEBM videos allowed")
@@ -590,44 +691,18 @@ async def upload_guide_video(file: UploadFile = File(...), user: dict = Depends(
     data = await file.read()
     if len(data) > VIDEO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="Video too large (max 50MB)")
-    async with db_pool.acquire() as conn:
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
-        if not guide:
-            raise HTTPException(status_code=400, detail="Create your local profile before adding a video")
-        path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
-        public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
-        # New upload always resets moderation state back to pending review
-        await conn.execute(
-            """UPDATE guides SET video_url=$1, video_approved=FALSE, video_rejected=FALSE,
-               video_rejection_reason=NULL WHERE id=$2""",
-            public_url, str(guide["id"])
-        )
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(guide["id"]))
-    d = row_to_dict(guide)
-    d["id"] = str(d["id"])
-    d["user_id"] = str(d["user_id"])
-    d["video_status"] = video_status(d)
-    return {"guide": d}
-
-@api.delete("/profile/guide/video")
-async def delete_guide_video(user: dict = Depends(require_role("local"))):
-    async with db_pool.acquire() as conn:
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
-        if not guide:
-            raise HTTPException(status_code=404, detail="Guide profile not found")
-        await conn.execute(
-            """UPDATE guides SET video_url=NULL, video_approved=FALSE, video_rejected=FALSE,
-               video_rejection_reason=NULL WHERE id=$1""",
-            str(guide["id"])
-        )
-    return {"ok": True}
+    path = f"{user['id']}/{uuid.uuid4().hex}.{ext}"
+    public_url = await upload_to_supabase(path, data, content_type, bucket=VIDEO_BUCKET)
+    return {"url": public_url}
 
 @api.get("/admin/videos")
 async def admin_list_videos(status: Optional[str] = None, user: dict = Depends(require_role("admin"))):
     """status: pending | approved | rejected | None (all guides that have a video)"""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM guides WHERE video_url IS NOT NULL ORDER BY created_at DESC"
+            """SELECT g.*, u.is_banned AS user_is_banned FROM guides g
+               JOIN users u ON u.id = g.user_id
+               WHERE g.video_url IS NOT NULL ORDER BY g.created_at DESC"""
         )
     result = []
     for row in rows:
@@ -643,15 +718,18 @@ async def admin_list_videos(status: Optional[str] = None, user: dict = Depends(r
 class VideoReviewIn(BaseModel):
     approved: bool
     reason: Optional[str] = None
+    ban_user: bool = False  # convenience: reject + suspend the account in one action, for obscene/clearly-fake content
 
 @api.post("/admin/guides/{guide_id}/video/review")
-async def admin_review_video(guide_id: str, body: VideoReviewIn, user: dict = Depends(require_role("admin"))):
+async def admin_review_video(guide_id: str, body: VideoReviewIn, admin: dict = Depends(require_role("admin"))):
     async with db_pool.acquire() as conn:
         guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
         if not guide or not guide["video_url"]:
             raise HTTPException(status_code=404, detail="No video submitted for this guide")
         if not body.approved and not (body.reason and body.reason.strip()):
             raise HTTPException(status_code=400, detail="A reason is required when rejecting a video")
+        if body.ban_user and body.approved:
+            raise HTTPException(status_code=400, detail="Can't approve and ban in the same action")
         await conn.execute(
             """UPDATE guides SET video_approved=$1, video_rejected=$2, video_rejection_reason=$3
                WHERE id=$4""",
@@ -659,9 +737,20 @@ async def admin_review_video(guide_id: str, body: VideoReviewIn, user: dict = De
             (body.reason or "").strip() if not body.approved else None,
             guide_id
         )
+        if body.ban_user:
+            await conn.execute(
+                """UPDATE users SET is_banned=TRUE, banned_at=$1, ban_reason=$2, banned_by=$3 WHERE id=$4""",
+                datetime.now(timezone.utc), (body.reason or "").strip(), str(admin["id"]), str(guide["user_id"])
+            )
         traveller_facing_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(guide["user_id"]))
     if traveller_facing_user:
-        if body.approved:
+        if body.ban_user:
+            await send_email(
+                traveller_facing_user["email"],
+                "Your LKK account has been suspended",
+                f"<h2>Account suspended</h2><p>{(body.reason or '').strip()}</p><p>Contact support if you believe this is a mistake.</p>"
+            )
+        elif body.approved:
             await send_email(
                 traveller_facing_user["email"],
                 "Your intro video is live — LKK 🌿",
@@ -673,7 +762,7 @@ async def admin_review_video(guide_id: str, body: VideoReviewIn, user: dict = De
                 "Your intro video needs a change — LKK 🌿",
                 f"<h2>Not quite ready yet</h2><p>{(body.reason or '').strip()}</p><p>Please upload a new video from your profile page.</p>"
             )
-    return {"ok": True, "approved": body.approved}
+    return {"ok": True, "approved": body.approved, "banned": body.ban_user}
 
 
 @api.get("/guides")
@@ -682,22 +771,23 @@ async def list_guides(
     min_rating: Optional[float] = None,
     sort: Optional[str] = "rating",
 ):
-    query = "SELECT * FROM guides WHERE is_complete = TRUE"
+    query = """SELECT g.* FROM guides g JOIN users u ON u.id = g.user_id
+               WHERE g.is_complete = TRUE AND u.is_banned = FALSE"""
     params = []
     i = 1
     if city:
-        query += f" AND LOWER(city) = LOWER(${i})"
+        query += f" AND LOWER(g.city) = LOWER(${i})"
         params.append(city)
         i += 1
     if min_rating is not None:
-        query += f" AND rating >= ${i}"
+        query += f" AND g.rating >= ${i}"
         params.append(min_rating)
         i += 1
     sort_map = {
-        "rating": "rating DESC",
-        "newest": "created_at DESC",
+        "rating": "g.rating DESC",
+        "newest": "g.created_at DESC",
     }
-    query += f" ORDER BY {sort_map.get(sort or 'rating', 'rating DESC')}"
+    query += f" ORDER BY {sort_map.get(sort or 'rating', 'g.rating DESC')}"
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(query, *params)
     result = []
@@ -711,13 +801,20 @@ async def list_guides(
 @api.get("/guides/cities")
 async def list_cities():
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT DISTINCT city FROM guides WHERE is_complete = TRUE ORDER BY city")
+        rows = await conn.fetch(
+            """SELECT DISTINCT g.city FROM guides g JOIN users u ON u.id = g.user_id
+               WHERE g.is_complete = TRUE AND u.is_banned = FALSE ORDER BY g.city"""
+        )
     return [row["city"] for row in rows]
 
 @api.get("/guides/{guide_id}")
 async def get_guide(guide_id: str):
     async with db_pool.acquire() as conn:
-        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
+        guide = await conn.fetchrow(
+            """SELECT g.* FROM guides g JOIN users u ON u.id = g.user_id
+               WHERE g.id = $1 AND u.is_banned = FALSE""",
+            guide_id
+        )
         if not guide:
             raise HTTPException(status_code=404, detail="Guide not found")
         reviews = await conn.fetch(
@@ -762,26 +859,19 @@ async def _refresh_guide_completeness(conn, guide_id: str) -> None:
 
 @api.post("/profile/guide")
 async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(require_role("local"))):
-    if not (body.avatar_url or "").strip() or not (body.video_url or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail="A profile photo and an intro video are both required before you can save."
-        )
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT id, video_url FROM guides WHERE user_id = $1", str(user["id"]))
-        incoming_video = (body.video_url or "").strip() or None
         if existing:
-            video_changed = incoming_video != existing["video_url"]
+            guide_id = str(existing["id"])
+            video_changed = existing["video_url"] != body.video_url
             if video_changed:
-                # A genuinely new/different video always re-enters the review
-                # queue. Re-saving the profile with the SAME video shouldn't
-                # reset an already-approved (or already-rejected) status.
+                # A new/replaced video always goes back into the review queue.
                 await conn.execute(
                     """UPDATE guides SET city=$1, bio=$2, languages=$3, specialities=$4,
                        avatar_url=$5, video_url=$6, video_approved=FALSE, video_rejected=FALSE,
                        video_rejection_reason=NULL WHERE user_id=$7""",
                     body.city, body.bio, body.languages, body.specialities,
-                    body.avatar_url, incoming_video, str(user["id"])
+                    body.avatar_url, body.video_url, str(user["id"])
                 )
             else:
                 await conn.execute(
@@ -790,7 +880,6 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
                     body.city, body.bio, body.languages, body.specialities,
                     body.avatar_url, str(user["id"])
                 )
-            guide_id = str(existing["id"])
         else:
             guide_id = str(uuid.uuid4())
             await conn.execute(
@@ -798,7 +887,7 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
                    avatar_url, video_url, rating, review_count, is_complete, verified, created_at)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
                 guide_id, str(user["id"]), user["name"], body.city, body.bio,
-                body.languages, body.specialities, body.avatar_url, incoming_video,
+                body.languages, body.specialities, body.avatar_url, body.video_url,
                 0.0, 0, False, False, datetime.now(timezone.utc)
             )
         await _refresh_guide_completeness(conn, guide_id)
@@ -807,6 +896,53 @@ async def upsert_guide_profile(body: GuideProfileIn, user: dict = Depends(requir
     d["id"] = str(d["id"])
     d["user_id"] = str(d["user_id"])
     d["video_status"] = video_status(d)
+    return {"guide": d}
+
+class BankDetailsIn(BaseModel):
+    account_name: str = Field(min_length=1)
+    # Provide either bank account + IFSC, or a UPI VPA — not both required.
+    account_number: Optional[str] = None
+    ifsc: Optional[str] = None
+    upi_vpa: Optional[str] = None
+
+@api.post("/profile/guide/bank")
+async def submit_bank_details(body: BankDetailsIn, user: dict = Depends(require_role("local"))):
+    has_bank = bool(body.account_number and body.ifsc)
+    has_upi = bool(body.upi_vpa)
+    if not has_bank and not has_upi:
+        raise HTTPException(status_code=400, detail="Enter either bank account + IFSC, or a UPI ID")
+    if has_bank and has_upi:
+        raise HTTPException(status_code=400, detail="Enter only one: bank account OR UPI, not both")
+
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
+        if not guide:
+            raise HTTPException(status_code=400, detail="Create your local profile before adding payout details")
+
+        contact_id = guide["razorpay_contact_id"]
+        if not contact_id:
+            contact_id = await razorpay_create_contact(body.account_name, user["email"], str(guide["id"]))
+
+        if has_bank:
+            fund_account_id = await razorpay_create_fund_account_bank(
+                contact_id, body.account_name, body.account_number, body.ifsc.upper()
+            )
+        else:
+            fund_account_id = await razorpay_create_fund_account_vpa(contact_id, body.upi_vpa)
+
+        await razorpay_trigger_validation(fund_account_id)
+
+        await conn.execute(
+            """UPDATE guides SET bank_account_name=$1, bank_account_number=$2, bank_ifsc=$3, upi_vpa=$4,
+               razorpay_contact_id=$5, razorpay_fund_account_id=$6, bank_verification_status='pending',
+               bank_verification_reason=NULL, bank_verified_at=NULL WHERE id=$7""",
+            body.account_name, body.account_number, body.ifsc.upper() if body.ifsc else None, body.upi_vpa,
+            contact_id, fund_account_id, str(guide["id"])
+        )
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(guide["id"]))
+    d = row_to_dict(guide)
+    d["id"] = str(d["id"])
+    d["user_id"] = str(d["user_id"])
     return {"guide": d}
 
 # --- Services ----------------------------------------------------------
@@ -827,8 +963,8 @@ async def list_services(
 ):
     query = """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
                g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified
-               FROM services s JOIN guides g ON g.id = s.guide_id
-               WHERE s.is_active = TRUE AND g.is_complete = TRUE"""
+               FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
+               WHERE s.is_active = TRUE AND g.is_complete = TRUE AND u.is_banned = FALSE"""
     params = []
     i = 1
     if city:
@@ -875,7 +1011,8 @@ async def get_service(service_id: str):
             """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
                g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified,
                g.bio AS guide_bio, g.video_url AS guide_video_url, g.video_approved AS guide_video_approved
-               FROM services s JOIN guides g ON g.id = s.guide_id WHERE s.id = $1""",
+               FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
+               WHERE s.id = $1 AND u.is_banned = FALSE""",
             service_id
         )
     if not row:
@@ -1101,25 +1238,112 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
     d["id"] = str(d["id"])
     return d
 
-@api.post("/bookings/{booking_id}/pay")
-async def mock_pay(booking_id: str, user: dict = Depends(require_role("traveller"))):
+class RazorpayVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+async def _mark_booking_paid(conn, booking, razorpay_payment_id: str):
+    await conn.execute(
+        "UPDATE bookings SET status='paid', payment_id=$1, razorpay_payment_id=$1, paid_at=$2 WHERE id=$3",
+        razorpay_payment_id, datetime.now(timezone.utc), str(booking["id"])
+    )
+    traveller = await conn.fetchrow("SELECT email FROM users WHERE id = $1", str(booking["traveller_user_id"]))
+    if traveller:
+        await send_email(
+            traveller["email"],
+            "Payment Received — LKK 🌿",
+            f"<h2>Payment confirmed!</h2><p>Amount: ₹{booking['amount']}. Your local will be in touch to confirm the meetup.</p>"
+        )
+
+@api.post("/bookings/{booking_id}/pay/create-order")
+async def create_razorpay_order(booking_id: str, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
         if booking["status"] != "pending_payment":
             raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
-        mock_payment_id = f"pay_mock_{uuid.uuid4().hex[:16]}"
-        await conn.execute(
-            "UPDATE bookings SET status='paid', payment_id=$1, paid_at=$2 WHERE id=$3",
-            mock_payment_id, datetime.now(timezone.utc), booking_id
+        order = await razorpay_create_order(
+            amount_rupees=booking["amount"],
+            receipt=f"booking_{booking_id}",
+            notes={"booking_id": booking_id, "traveller_id": str(user["id"])},
         )
-    await send_email(
-        user["email"],
-        "Payment Received — LKK 🌿",
-        f"<h2>Payment confirmed!</h2><p>Amount: ₹{booking['amount']}. Your local will send your itinerary soon.</p>"
-    )
-    return {"ok": True, "payment_id": mock_payment_id, "status": "paid"}
+        await conn.execute(
+            "UPDATE bookings SET razorpay_order_id = $1 WHERE id = $2",
+            order["id"], booking_id
+        )
+    return {
+        "order_id": order["id"],
+        "amount": order["amount"],
+        "currency": order["currency"],
+        "key_id": RAZORPAY_KEY_ID,
+        "booking_id": booking_id,
+        "name": "LKK",
+        "description": booking["service_title"],
+        "prefill": {"contact": booking["traveller_phone"], "name": user["name"], "email": user["email"]},
+    }
+
+@api.post("/bookings/{booking_id}/pay/verify")
+async def verify_razorpay_payment(booking_id: str, body: RazorpayVerifyIn, user: dict = Depends(require_role("traveller"))):
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if booking["status"] == "paid":
+            return {"ok": True, "status": "paid"}  # already confirmed, likely via webhook
+        if booking["status"] != "pending_payment":
+            raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
+        if str(booking["razorpay_order_id"]) != body.razorpay_order_id:
+            raise HTTPException(status_code=400, detail="Order mismatch")
+        if not razorpay_verify_payment_signature(body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature):
+            raise HTTPException(status_code=400, detail="Payment verification failed")
+        await _mark_booking_paid(conn, booking, body.razorpay_payment_id)
+    return {"ok": True, "status": "paid"}
+
+@api.post("/webhooks/razorpay")
+async def razorpay_webhook(request: Request):
+    """Backstop for the case where the traveller's browser closes right after
+    paying but before the frontend's verify call fires. Razorpay signs this
+    request separately from the checkout signature, using a webhook secret
+    configured in the Razorpay dashboard."""
+    raw_body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    if not razorpay_verify_webhook_signature(raw_body, signature):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    payload = json.loads(raw_body)
+    event = payload.get("event")
+    if event == "payment.captured":
+        payment_entity = payload["payload"]["payment"]["entity"]
+        order_id = payment_entity.get("order_id")
+        payment_id = payment_entity.get("id")
+        async with db_pool.acquire() as conn:
+            booking = await conn.fetchrow("SELECT * FROM bookings WHERE razorpay_order_id = $1", order_id)
+            if booking and booking["status"] == "pending_payment":
+                await _mark_booking_paid(conn, booking, payment_id)
+    elif event in ("fund_account.validation.completed", "fund_account.validation.failed"):
+        validation_entity = payload["payload"]["fund_account.validation"]["entity"]
+        fund_account_id = validation_entity.get("fund_account", {}).get("id")
+        status = validation_entity.get("status")  # "completed" | "failed"
+        results = validation_entity.get("results", {}) or {}
+        name_match = results.get("account_status") == "active" and results.get("name_match_result") in ("SUCCESS", None)
+        async with db_pool.acquire() as conn:
+            guide = await conn.fetchrow("SELECT id FROM guides WHERE razorpay_fund_account_id = $1", fund_account_id)
+            if guide:
+                if status == "completed" and name_match:
+                    await conn.execute(
+                        """UPDATE guides SET bank_verification_status='verified', bank_verification_reason=NULL,
+                           bank_verified_at=$1 WHERE id=$2""",
+                        datetime.now(timezone.utc), str(guide["id"])
+                    )
+                else:
+                    reason = results.get("failure_reason") or "Verification failed — please check your bank/UPI details and try again."
+                    await conn.execute(
+                        """UPDATE guides SET bank_verification_status='failed', bank_verification_reason=$1
+                           WHERE id=$2""",
+                        reason, str(guide["id"])
+                    )
+    return {"ok": True}
 
 @api.get("/bookings/mine")
 async def my_bookings(user: dict = Depends(get_current_user)):
@@ -1280,8 +1504,47 @@ async def post_review(booking_id: str, body: ReviewIn, user: dict = Depends(requ
 @api.get("/admin/users")
 async def admin_users(user: dict = Depends(require_role("admin"))):
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id,email,name,role,phone,city,phone_verified,created_at FROM users ORDER BY created_at DESC LIMIT 500")
+        rows = await conn.fetch(
+            """SELECT id,email,name,role,phone,city,phone_verified,created_at,
+               is_banned,banned_at,ban_reason FROM users ORDER BY created_at DESC LIMIT 500"""
+        )
     return rows_to_list(rows)
+
+class BanUserIn(BaseModel):
+    reason: str = Field(min_length=1)
+
+@api.post("/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: str, body: BanUserIn, admin: dict = Depends(require_role("admin"))):
+    async with db_pool.acquire() as conn:
+        target = await conn.fetchrow("SELECT id, role FROM users WHERE id = $1", user_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="User not found")
+        if target["role"] == "admin":
+            raise HTTPException(status_code=400, detail="Can't ban an admin account")
+        await conn.execute(
+            """UPDATE users SET is_banned=TRUE, banned_at=$1, ban_reason=$2, banned_by=$3 WHERE id=$4""",
+            datetime.now(timezone.utc), body.reason.strip(), str(admin["id"]), user_id
+        )
+        target_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", user_id)
+    if target_user:
+        await send_email(
+            target_user["email"],
+            "Your LKK account has been suspended",
+            f"<h2>Account suspended</h2><p>{body.reason.strip()}</p><p>Contact support if you believe this is a mistake.</p>"
+        )
+    return {"ok": True}
+
+@api.post("/admin/users/{user_id}/unban")
+async def admin_unban_user(user_id: str, admin: dict = Depends(require_role("admin"))):
+    async with db_pool.acquire() as conn:
+        target = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="User not found")
+        await conn.execute(
+            "UPDATE users SET is_banned=FALSE, banned_at=NULL, ban_reason=NULL, banned_by=NULL WHERE id=$1",
+            user_id
+        )
+    return {"ok": True}
 
 @api.get("/admin/bookings")
 async def admin_bookings(user: dict = Depends(require_role("admin"))):
