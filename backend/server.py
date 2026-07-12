@@ -1816,7 +1816,11 @@ _vercel_preview_regex = r"^https://lkk-kmk5(-[a-zA-Z0-9-]+)?\.vercel\.app$"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", _default_cors_origins).split(","),
+    allow_origins=[
+        o.strip().strip('"').strip("'")
+        for o in os.environ.get("CORS_ORIGINS", _default_cors_origins).split(",")
+        if o.strip().strip('"').strip("'")
+    ],
     allow_origin_regex=_vercel_preview_regex,
     allow_credentials=True,
     allow_methods=["*"],
