@@ -1558,6 +1558,65 @@ async def admin_disputes(user: dict = Depends(require_role("admin"))):
         rows = await conn.fetch("SELECT * FROM bookings WHERE status='disputed' ORDER BY disputed_at DESC")
     return rows_to_list(rows)
 
+def _mask_account_number(acc: Optional[str]) -> Optional[str]:
+    if not acc:
+        return None
+    return f"••••{acc[-4:]}" if len(acc) > 4 else "••••"
+
+@api.get("/admin/payouts")
+async def admin_payouts(status: Optional[str] = None, user: dict = Depends(require_role("admin"))):
+    """status: 'pending' | 'paid' | None (all). A booking shows up here once the
+    traveller has confirmed the trip happened (payment_released) — this is
+    purely a tracking queue for the manual bank/UPI transfer you make outside
+    Razorpay; nothing here moves money automatically."""
+    query = """SELECT b.*, g.bank_account_name, g.bank_account_number, g.bank_ifsc, g.upi_vpa,
+               g.bank_verification_status, g.bank_verification_reason
+               FROM bookings b JOIN guides g ON g.id = b.guide_id
+               WHERE b.payment_released = TRUE"""
+    if status == "pending":
+        query += " AND b.payout_paid_out = FALSE"
+    elif status == "paid":
+        query += " AND b.payout_paid_out = TRUE"
+    query += " ORDER BY b.payout_paid_out ASC, b.completed_at DESC NULLS LAST, b.created_at DESC"
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query)
+    result = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["id"] = str(d["id"])
+        d["bank_account_number_masked"] = _mask_account_number(d.pop("bank_account_number", None))
+        result.append(d)
+    return result
+
+class MarkPayoutIn(BaseModel):
+    note: Optional[str] = None
+
+@api.post("/admin/bookings/{booking_id}/payout")
+async def mark_payout_paid(booking_id: str, body: MarkPayoutIn, user: dict = Depends(require_role("admin"))):
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        if not booking["payment_released"]:
+            raise HTTPException(status_code=400, detail="This booking's payout isn't due yet")
+        await conn.execute(
+            "UPDATE bookings SET payout_paid_out=TRUE, payout_paid_out_at=$1, payout_note=$2 WHERE id=$3",
+            datetime.now(timezone.utc), (body.note or "").strip() or None, booking_id
+        )
+    return {"ok": True}
+
+@api.post("/admin/bookings/{booking_id}/payout/undo")
+async def undo_payout_paid(booking_id: str, user: dict = Depends(require_role("admin"))):
+    async with db_pool.acquire() as conn:
+        booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        await conn.execute(
+            "UPDATE bookings SET payout_paid_out=FALSE, payout_paid_out_at=NULL, payout_note=NULL WHERE id=$1",
+            booking_id
+        )
+    return {"ok": True}
+
 @api.post("/admin/disputes/{booking_id}/resolve")
 async def admin_resolve(booking_id: str, refund_to_traveller: bool = False, user: dict = Depends(require_role("admin"))):
     async with db_pool.acquire() as conn:
