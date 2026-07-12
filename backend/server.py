@@ -739,7 +739,7 @@ async def admin_review_video(guide_id: str, body: VideoReviewIn, admin: dict = D
         )
         if body.ban_user:
             await conn.execute(
-                """UPDATE users SET is_banned=TRUE, banned_at=$1, ban_reason=$2, banned_by=$3 WHERE id=$4""",
+                """UPDATE users SET is_banned=TRUE, banned_at=$1, banned_reason=$2, banned_by=$3 WHERE id=$4""",
                 datetime.now(timezone.utc), (body.reason or "").strip(), str(admin["id"]), str(guide["user_id"])
             )
         traveller_facing_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(guide["user_id"]))
@@ -1506,7 +1506,7 @@ async def admin_users(user: dict = Depends(require_role("admin"))):
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT id,email,name,role,phone,city,phone_verified,created_at,
-               is_banned,banned_at,ban_reason FROM users ORDER BY created_at DESC LIMIT 500"""
+               is_banned,banned_at,banned_reason FROM users ORDER BY created_at DESC LIMIT 500"""
         )
     return rows_to_list(rows)
 
@@ -1522,7 +1522,7 @@ async def admin_ban_user(user_id: str, body: BanUserIn, admin: dict = Depends(re
         if target["role"] == "admin":
             raise HTTPException(status_code=400, detail="Can't ban an admin account")
         await conn.execute(
-            """UPDATE users SET is_banned=TRUE, banned_at=$1, ban_reason=$2, banned_by=$3 WHERE id=$4""",
+            """UPDATE users SET is_banned=TRUE, banned_at=$1, banned_reason=$2, banned_by=$3 WHERE id=$4""",
             datetime.now(timezone.utc), body.reason.strip(), str(admin["id"]), user_id
         )
         target_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", user_id)
@@ -1541,7 +1541,7 @@ async def admin_unban_user(user_id: str, admin: dict = Depends(require_role("adm
         if not target:
             raise HTTPException(status_code=404, detail="User not found")
         await conn.execute(
-            "UPDATE users SET is_banned=FALSE, banned_at=NULL, ban_reason=NULL, banned_by=NULL WHERE id=$1",
+            "UPDATE users SET is_banned=FALSE, banned_at=NULL, banned_reason=NULL, banned_by=NULL WHERE id=$1",
             user_id
         )
     return {"ok": True}
