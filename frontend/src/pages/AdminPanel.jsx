@@ -3,7 +3,7 @@ import { api, inr } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock, Ban, ShieldOff } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock, Ban, ShieldOff, Landmark, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_COLORS = {
@@ -29,6 +29,9 @@ export default function AdminPanel() {
   const [disputes, setDisputes] = useState([]);
   const [videos, setVideos] = useState([]);
   const [videoFilter, setVideoFilter] = useState("pending");
+  const [payouts, setPayouts] = useState([]);
+  const [payoutFilter, setPayoutFilter] = useState("pending");
+  const [payoutNotes, setPayoutNotes] = useState({});
   const [rejectReasons, setRejectReasons] = useState({});
   const [banReasons, setBanReasons] = useState({});
   const [loading, setLoading] = useState(true);
@@ -39,18 +42,20 @@ export default function AdminPanel() {
   const load = async () => {
     setLoading(true);
     try {
-      const [s, b, u, d, v] = await Promise.all([
+      const [s, b, u, d, v, p] = await Promise.all([
         api.get("/admin/stats"),
         api.get("/admin/bookings"),
         api.get("/admin/users"),
         api.get("/admin/disputes"),
         api.get("/admin/videos"),
+        api.get("/admin/payouts"),
       ]);
       setStats(s.data);
       setBookings(b.data);
       setUsers(u.data);
       setDisputes(d.data);
       setVideos(v.data);
+      setPayouts(p.data);
     } catch (e) {
       toast.error("Failed to load admin data");
     } finally {
@@ -136,6 +141,37 @@ export default function AdminPanel() {
       setActing(null);
     }
   };
+
+  const handleMarkPaid = async (bookingId) => {
+    setActing(`payout-${bookingId}`);
+    try {
+      await api.post(`/admin/bookings/${bookingId}/payout`, { note: payoutNotes[bookingId] || null });
+      toast.success("Marked as paid out");
+      setPayoutNotes((n) => ({ ...n, [bookingId]: "" }));
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to mark payout");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleUndoPayout = async (bookingId) => {
+    setActing(`undo-payout-${bookingId}`);
+    try {
+      await api.post(`/admin/bookings/${bookingId}/payout/undo`);
+      toast.success("Reverted to pending payout");
+      load();
+    } catch (e) {
+      toast.error("Failed to undo payout");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const filteredPayouts = payouts.filter((p) =>
+    payoutFilter === "all" ? true : payoutFilter === "pending" ? !p.payout_paid_out : p.payout_paid_out
+  );
 
   const filteredVideos = videos.filter((g) => videoFilter === "all" || g.video_status === videoFilter);
 
@@ -379,6 +415,125 @@ export default function AdminPanel() {
                       )}
                     </div>
                   </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Payouts queue */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <h2 className="font-heading text-xl font-bold text-stone-900">
+            Payouts ({filteredPayouts.length})
+          </h2>
+          <select
+            value={payoutFilter}
+            onChange={(e) => setPayoutFilter(e.target.value)}
+            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700"
+            data-testid="payout-filter-select"
+          >
+            <option value="pending">Awaiting payout</option>
+            <option value="paid">Paid out</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <p className="mt-1 text-sm text-stone-500">
+          These trips are confirmed complete. Money is sitting in your Razorpay account — transfer each local's share
+          manually, then mark it here. Always check the bank status below before sending.
+        </p>
+
+        {loading ? (
+          <div className="mt-4 text-stone-500">Loading…</div>
+        ) : filteredPayouts.length === 0 ? (
+          <div className="mt-4 text-stone-500">Nothing in this filter.</div>
+        ) : (
+          <div className="mt-4 space-y-4">
+            {filteredPayouts.map((p) => (
+              <div key={p.id} className="rounded-2xl border border-stone-200 bg-white p-5" data-testid={`payout-row-${p.id}`}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-[220px]">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-medium text-stone-900">{p.guide_name}</div>
+                      {p.bank_verification_status === "verified" && (
+                        <Badge className="bg-green-800 text-white hover:bg-green-800 gap-1">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Bank verified
+                        </Badge>
+                      )}
+                      {p.bank_verification_status === "pending" && (
+                        <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
+                          <Clock className="h-3.5 w-3.5" /> Verifying…
+                        </Badge>
+                      )}
+                      {(p.bank_verification_status === "failed" || p.bank_verification_status === "none" || !p.bank_verification_status) && (
+                        <Badge variant="outline" className="border-red-300 bg-red-50 text-red-800 gap-1">
+                          <XCircle className="h-3.5 w-3.5" /> Not verified — don't send yet
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-stone-400">{p.service_title} · {p.booking_date}</div>
+                  </div>
+
+                  <div className="min-w-[200px] rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 text-sm">
+                    {p.upi_vpa ? (
+                      <div>
+                        <div className="text-xs text-stone-400">UPI</div>
+                        <div className="font-mono text-stone-800">{p.upi_vpa}</div>
+                      </div>
+                    ) : p.bank_account_number_masked ? (
+                      <div>
+                        <div className="text-xs text-stone-400">{p.bank_account_name} · {p.bank_ifsc}</div>
+                        <div className="font-mono text-stone-800">{p.bank_account_number_masked}</div>
+                      </div>
+                    ) : (
+                      <span className="text-stone-400">No payout details on file</span>
+                    )}
+                  </div>
+
+                  <div className="text-right">
+                    <div className="font-heading text-xl font-bold text-stone-900">{inr(p.local_payout)}</div>
+                    <div className="text-xs text-stone-400">their 90% share</div>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
+                  {p.payout_paid_out ? (
+                    <>
+                      <span className="text-xs text-stone-500">
+                        Paid out {p.payout_paid_out_at ? new Date(p.payout_paid_out_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}
+                        {p.payout_note ? ` — ${p.payout_note}` : ""}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleUndoPayout(p.id)}
+                        disabled={acting === `undo-payout-${p.id}`}
+                        className="border-stone-300 h-8 text-xs"
+                        data-testid={`undo-payout-${p.id}`}
+                      >
+                        <Undo2 className="mr-1.5 h-3.5 w-3.5" /> Undo
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Input
+                        value={payoutNotes[p.id] || ""}
+                        onChange={(e) => setPayoutNotes((n) => ({ ...n, [p.id]: e.target.value }))}
+                        placeholder="Note (e.g. UPI ref number)"
+                        className="h-9 text-xs w-64"
+                        data-testid={`payout-note-${p.id}`}
+                      />
+                      <Button
+                        onClick={() => handleMarkPaid(p.id)}
+                        disabled={acting === `payout-${p.id}`}
+                        className="bg-green-800 text-white hover:bg-green-900 h-9 text-xs"
+                        data-testid={`mark-paid-${p.id}`}
+                      >
+                        <Landmark className="mr-1.5 h-3.5 w-3.5" /> Mark as paid out
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
