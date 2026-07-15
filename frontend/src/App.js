@@ -1,6 +1,7 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
+import { Analytics } from "@vercel/analytics/react";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Navbar from "@/components/Navbar";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -95,6 +96,7 @@ export default function App() {
           <Toaster richColors position="top-right" />
         </AuthProvider>
       </BrowserRouter>
+      <Analytics />
     </div>
   );
 }
