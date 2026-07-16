@@ -59,7 +59,7 @@ function MeltHeadline({ text }) {
 }
 
 export default function Landing() {
-  const [demoHours, setDemoHours] = useState(2);
+  const [demoHours, setDemoHours] = useState(3);
   const demoPrice = 499 + (demoHours - 2) * 250;
   const location = useLocation();
 
