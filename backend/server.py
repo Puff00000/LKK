@@ -15,7 +15,7 @@ import hmac
 import hashlib
 import base64
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Literal
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, File, UploadFile
@@ -126,6 +126,19 @@ def normalize_phone(raw: str) -> str:
     if digits.startswith("0") and len(digits) == 11:
         return f"91{digits[1:]}"
     raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian phone number")
+
+def parse_date(raw: str, field_name: str = "date") -> date:
+    """Convert an incoming 'YYYY-MM-DD' string to a native date object.
+
+    asyncpg's binary protocol expects a real datetime.date for DATE columns —
+    passing a plain str causes: DataError: str object has no attribute
+    'toordinal'. Every DATE-column insert (bookings.booking_date,
+    trips.start_date, trips.end_date) must go through this first.
+    """
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}: expected YYYY-MM-DD")
 
 def row_to_dict(row) -> dict:
     if row is None:
@@ -1119,7 +1132,9 @@ async def create_trip(body: TripIn, user: dict = Depends(require_role("traveller
                start_date, end_date, created_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
             trip_id, str(user["id"]), body.city, body.trip_name or None,
-            body.traveller_count or 1, body.start_date, body.end_date,
+            body.traveller_count or 1,
+            parse_date(body.start_date, "start_date"),
+            parse_date(body.end_date, "end_date"),
             datetime.now(timezone.utc)
         )
         row = await conn.fetchrow("SELECT * FROM trips WHERE id = $1", trip_id)
@@ -1210,7 +1225,9 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
                    start_date, end_date, created_at)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
                 trip_id, str(user["id"]), body.trip_city, body.trip_name or None,
-                body.trip_traveller_count or 1, body.trip_start_date, body.trip_end_date,
+                body.trip_traveller_count or 1,
+                parse_date(body.trip_start_date, "trip_start_date"),
+                parse_date(body.trip_end_date, "trip_end_date"),
                 datetime.now(timezone.utc)
             )
         booking_id = str(uuid.uuid4())
@@ -1223,7 +1240,7 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
             booking_id, str(guide["id"]), guide["name"], guide["city"], str(guide["user_id"]),
             str(user["id"]), user["name"], body.traveller_phone,
             str(service["id"]), service["title"],
-            body.booking_date, body.booking_time, duration_hours, body.notes or "",
+            parse_date(body.booking_date, "booking_date"), body.booking_time, duration_hours, body.notes or "",
             amount, platform_fee, local_payout,
             "pending_payment", datetime.now(timezone.utc), trip_id
         )
