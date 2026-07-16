@@ -1283,7 +1283,7 @@ async def create_razorpay_order(booking_id: str, user: dict = Depends(require_ro
             raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
         order = await razorpay_create_order(
             amount_rupees=booking["amount"],
-            receipt=f"booking_{booking_id}",
+            receipt=f"bk_{booking_id}",
             notes={"booking_id": booking_id, "traveller_id": str(user["id"])},
         )
         await conn.execute(
