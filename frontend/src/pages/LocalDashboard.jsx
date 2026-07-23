@@ -13,6 +13,7 @@ import {
   Plus, Pencil, Trash2, X,
 } from "lucide-react";
 import { toast } from "sonner";
+import BankVerificationCard from "@/components/BankVerificationCard";
 
 const STATUS = {
   pending_payment: { text: "Awaiting payment", className: "bg-amber-50 text-amber-800 border-amber-200" },
@@ -336,6 +337,17 @@ export default function LocalDashboard() {
         <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
           Your profile is incomplete — you need a city, bio, and at least one active service to appear in Browse.
         </div>
+      )}
+
+      {/* Payout details only become relevant once a traveller has actually booked
+          and this local has accepted at least one trip — no point asking for
+          bank details before there's any money to receive. Checks the full
+          lifecycle (not just bookings currently sitting in "accepted"), since a
+          trip that's since moved on to itinerary_delivered/completed/disputed
+          necessarily passed through acceptance too — otherwise the card would
+          wrongly disappear again once a trip completes. */}
+      {profile && bookings.some((b) => ["accepted", "itinerary_delivered", "completed", "disputed"].includes(b.status)) && (
+        <BankVerificationCard guide={profile} onUpdated={setProfile} />
       )}
 
       {/* Stats */}
