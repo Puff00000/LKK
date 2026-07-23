@@ -617,6 +617,83 @@ async def login(request: Request, body: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     return {"user": public_user(user)}
 
+ACTIVE_BOOKING_STATUSES = ("pending_payment", "paid", "accepted", "itinerary_delivered")
+
+class AccountDeleteIn(BaseModel):
+    password: str
+
+@api.get("/account/delete-preview")
+async def account_delete_preview(user: dict = Depends(get_current_user)):
+    """Lets the frontend show the right warning BEFORE the user commits —
+    how many active bookings exist that would get cancelled by deleting now."""
+    async with db_pool.acquire() as conn:
+        if user["role"] == "traveller":
+            rows = await conn.fetch(
+                f"SELECT id FROM bookings WHERE traveller_user_id=$1 AND status = ANY($2::text[])",
+                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+            )
+        elif user["role"] == "local":
+            rows = await conn.fetch(
+                f"SELECT id FROM bookings WHERE local_user_id=$1 AND status = ANY($2::text[])",
+                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+            )
+        else:
+            rows = []
+    return {"active_booking_count": len(rows)}
+
+@api.post("/account/delete")
+@limiter.limit("5/hour")
+async def delete_account(request: Request, body: AccountDeleteIn, user: dict = Depends(get_current_user)):
+    if user["role"] == "admin":
+        raise HTTPException(status_code=400, detail="Admin accounts can't be self-deleted here")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT password_hash FROM users WHERE id = $1", str(user["id"]))
+        if not row or not verify_password(body.password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Incorrect password")
+
+        # Cancel any active bookings tied to this account, on whichever side
+        # they're on. Cancelling (not deleting) preserves the record for the
+        # OTHER party and for accounting — only the person's own identifying
+        # info gets scrubbed below.
+        if user["role"] == "traveller":
+            await conn.execute(
+                "UPDATE bookings SET status='cancelled' WHERE traveller_user_id=$1 AND status = ANY($2::text[])",
+                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+            )
+        elif user["role"] == "local":
+            await conn.execute(
+                "UPDATE bookings SET status='cancelled' WHERE local_user_id=$1 AND status = ANY($2::text[])",
+                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+            )
+
+        # Scrub personal info but keep the row (and its id) intact, since
+        # bookings/messages/reviews reference it and belong to the other party too.
+        anon_email = f"deleted-{user['id']}@deleted.lkk.co.in"
+        await conn.execute(
+            """UPDATE users SET email=$1, name='Deleted user', phone=NULL, city=NULL,
+               password_hash=$2, phone_verified=FALSE WHERE id=$3""",
+            anon_email, hash_password(secrets.token_urlsafe(32)), str(user["id"])
+        )
+
+        # If they were a local, scrub their guide profile + bank details too,
+        # and deactivate their services so they vanish from Browse.
+        if user["role"] == "local":
+            guide = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
+            if guide:
+                await conn.execute(
+                    """UPDATE guides SET bio=NULL, avatar_url=NULL, video_url=NULL, video_approved=FALSE,
+                       video_rejected=FALSE, video_rejection_reason=NULL, is_complete=FALSE,
+                       bank_account_name=NULL, bank_account_number=NULL, bank_ifsc=NULL, upi_vpa=NULL,
+                       bank_verification_status=NULL, bank_verification_reason=NULL, bank_verified_at=NULL,
+                       razorpay_contact_id=NULL, razorpay_fund_account_id=NULL
+                       WHERE id=$1""",
+                    guide["id"]
+                )
+                await conn.execute("UPDATE services SET is_active=FALSE WHERE guide_id=$1", guide["id"])
+
+    return {"ok": True}
+
 # --- OTP (mock for now) ----------------------------------------------------
 @api.post("/otp/send")
 async def otp_send(body: OTPSendIn, user: dict = Depends(get_current_user)):
