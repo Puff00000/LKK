@@ -9,7 +9,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { Menu, User, LogOut, LayoutDashboard, Shield } from "lucide-react";
+import { Menu, User, LogOut, LayoutDashboard, Shield, Settings } from "lucide-react";
 
 const Logo = () => (
   <Link to="/" data-testid="nav-logo" className="group flex items-center gap-2.5">
@@ -108,6 +108,12 @@ export default function Navbar() {
                   <DropdownMenuItem data-testid="menu-profile" onClick={() => navigate("/local/profile")}>
                     <User className="mr-2 h-4 w-4" />
                     My guide profile
+                  </DropdownMenuItem>
+                )}
+                {(user.role === "traveller" || user.role === "local") && (
+                  <DropdownMenuItem data-testid="menu-settings" onClick={() => navigate("/settings")}>
+                    <Settings className="mr-2 h-4 w-4" />
+                    Settings
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
