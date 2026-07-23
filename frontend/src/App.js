@@ -19,6 +19,7 @@ import TravellerDashboard from "@/pages/TravellerDashboard";
 import LocalDashboard from "@/pages/LocalDashboard";
 import GuideProfileEdit from "@/pages/GuideProfileEdit";
 import BookingDetail from "@/pages/BookingDetail";
+import Settings from "@/pages/Settings";
 import AdminPanel from "@/pages/AdminPanel";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
@@ -80,6 +81,14 @@ export default function App() {
               element={
                 <ProtectedRoute roles={["traveller", "local", "admin"]}>
                   <BookingDetail />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute roles={["traveller", "local"]}>
+                  <Settings />
                 </ProtectedRoute>
               }
             />
