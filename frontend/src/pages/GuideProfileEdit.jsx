@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, ShieldAlert, Upload, Video, Clock, XCircle, AlertTriangle } from "lucide-react";
+import { CheckCircle2, ShieldCheck, ShieldAlert, Video, Clock, XCircle, AlertTriangle, Camera } from "lucide-react";
+import CameraCaptureModal from "@/components/CameraCaptureModal";
+import CameraRecordModal from "@/components/CameraRecordModal";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -35,8 +37,8 @@ export default function GuideProfileEdit() {
   const [uploading, setUploading] = useState(false);
   const [videoUploading, setVideoUploading] = useState(false);
   const [videoUploadPct, setVideoUploadPct] = useState(0);
-  const fileRef = useRef(null);
-  const videoFileRef = useRef(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [videoRecorderOpen, setVideoRecorderOpen] = useState(false);
 
   useEffect(() => {
     api.get("/profile/guide/me").then(({ data }) => {
@@ -85,19 +87,17 @@ export default function GuideProfileEdit() {
     }
   };
 
-  const onFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const onPhotoCaptured = async (blob) => {
     setUploading(true);
     try {
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", blob, "photo.jpg");
       const { data } = await api.post("/upload", fd, {
         headers: { "Content-Type": "multipart/form-data" },
         timeout: 60000,
       });
       setForm((f) => ({ ...f, avatar_url: data.url }));
-      toast.success("Photo uploaded");
+      toast.success("Photo captured");
     } catch (e) {
       if (e.code === "ECONNABORTED") {
         toast.error("Upload timed out. Check your connection and try again.");
@@ -106,29 +106,20 @@ export default function GuideProfileEdit() {
       }
     } finally {
       setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
-  const onVideoFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const ext = file.name.split(".").pop()?.toLowerCase();
-    if (!["mp4", "mov", "webm"].includes(ext)) {
-      toast.error("Only MP4, MOV, or WEBM videos are allowed");
-      if (videoFileRef.current) videoFileRef.current.value = "";
+  const onVideoCaptured = async (blob) => {
+    if (blob.size > 50 * 1024 * 1024) {
+      toast.error("Recording is too large (max 50MB) — try a shorter take.");
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("Video is too large (max 50MB)");
-      if (videoFileRef.current) videoFileRef.current.value = "";
-      return;
-    }
+    const ext = blob.type.includes("mp4") ? "mp4" : "webm";
     setVideoUploading(true);
     setVideoUploadPct(0);
     try {
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", blob, `video.${ext}`);
       // Plain storage upload — doesn't touch your saved profile yet. It only
       // becomes part of your public profile (and enters review) once you hit
       // "Save profile" below.
@@ -140,17 +131,16 @@ export default function GuideProfileEdit() {
         },
       });
       setForm((f) => ({ ...f, video_url: data.url }));
-      toast.success("Video uploaded — hit Save profile to submit it for review.");
+      toast.success("Video recorded — hit Save profile to submit it for review.");
     } catch (e) {
       if (e.code === "ECONNABORTED") {
-        toast.error("Video upload timed out. Try a smaller file or check your connection.");
+        toast.error("Video upload timed out. Try again or check your connection.");
       } else {
         toast.error(formatApiError(e.response?.data?.detail) || e.message);
       }
     } finally {
       setVideoUploading(false);
       setVideoUploadPct(0);
-      if (videoFileRef.current) videoFileRef.current.value = "";
     }
   };
 
@@ -208,26 +198,18 @@ export default function GuideProfileEdit() {
               )}
             </div>
             <div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={onFile}
-                className="hidden"
-                data-testid="avatar-file-input"
-              />
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => fileRef.current?.click()}
+                onClick={() => setCameraOpen(true)}
                 disabled={uploading}
-                data-testid="avatar-upload-btn"
+                data-testid="avatar-camera-btn"
                 className="border-stone-300"
               >
-                <Upload className="mr-2 h-4 w-4" />
-                {uploading ? "Uploading…" : previewSrc ? "Replace photo" : "Upload photo"}
+                <Camera className="mr-2 h-4 w-4" />
+                {uploading ? "Uploading…" : previewSrc ? "Retake photo" : "Take photo"}
               </Button>
-              <p className="mt-1.5 text-xs text-stone-500">JPG / PNG / WEBP up to 5MB.</p>
+              <p className="mt-1.5 text-xs text-stone-500">Live camera only — for identity verification, this can't be uploaded from your gallery.</p>
               {missingPhoto && <p className="mt-1 text-xs text-red-600" data-testid="photo-missing-hint">A profile photo is required.</p>}
             </div>
           </div>
@@ -289,26 +271,18 @@ export default function GuideProfileEdit() {
               )}
             </div>
             <div>
-              <input
-                ref={videoFileRef}
-                type="file"
-                accept="video/mp4,video/quicktime,video/webm"
-                onChange={onVideoFile}
-                className="hidden"
-                data-testid="video-file-input"
-              />
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => videoFileRef.current?.click()}
+                onClick={() => setVideoRecorderOpen(true)}
                 disabled={videoUploading}
-                data-testid="video-upload-btn"
+                data-testid="video-camera-btn"
                 className="border-stone-300"
               >
-                <Upload className="mr-2 h-4 w-4" />
-                {videoUploading ? `Uploading… ${videoUploadPct}%` : form.video_url ? "Replace video" : "Upload video"}
+                <Camera className="mr-2 h-4 w-4" />
+                {videoUploading ? `Uploading… ${videoUploadPct}%` : form.video_url ? "Re-record video" : "Record video"}
               </Button>
-              <p className="mt-1.5 text-xs text-stone-500">MP4 / MOV / WEBM up to 50MB.</p>
+              <p className="mt-1.5 text-xs text-stone-500">Live camera only, up to 60 seconds — can't be uploaded from your gallery.</p>
               {missingVideo && <p className="mt-1 text-xs text-red-600" data-testid="video-missing-hint">An intro video is required.</p>}
             </div>
           </div>
@@ -348,6 +322,9 @@ export default function GuideProfileEdit() {
           {saving ? "Saving…" : "Save profile"}
         </Button>
       </form>
+
+      <CameraCaptureModal open={cameraOpen} onOpenChange={setCameraOpen} onCapture={onPhotoCaptured} />
+      <CameraRecordModal open={videoRecorderOpen} onOpenChange={setVideoRecorderOpen} onCapture={onVideoCaptured} />
     </div>
   );
 }
