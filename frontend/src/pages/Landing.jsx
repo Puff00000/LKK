@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ArrowRight, MessageCircle, MapPinned, Sparkles, ShieldCheck, IndianRupee, Star } from "lucide-react";
 
-const cities = ["Jaipur", "Goa", "Manali", "Varanasi", "Bangalore", "Udaipur"];
+const cities = ["Jaipur", "Udaipur", "Jodhpur", "Kasol", "Haltari", "Rishikesh"];
 
 const steps = [
   {
