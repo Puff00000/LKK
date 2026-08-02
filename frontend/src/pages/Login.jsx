@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { api, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,15 +16,21 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
   const next = new URLSearchParams(location.search).get("next") || null;
 
   const onSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
+    setNeedsVerification(false);
     const res = await login(email, password);
     setSubmitting(false);
     if (!res.ok) {
       toast.error(res.error);
+      if (res.error?.toLowerCase().includes("verify your email")) {
+        setNeedsVerification(true);
+      }
       return;
     }
     toast.success(`Welcome back, ${res.user.name}`);
@@ -31,6 +38,18 @@ export default function Login() {
     else if (res.user.role === "admin") navigate("/admin");
     else if (res.user.role === "local") navigate("/local");
     else navigate("/dashboard");
+  };
+
+  const resendVerification = async () => {
+    setResending(true);
+    try {
+      await api.post("/auth/resend-verification", { email });
+      toast.success("If needed, a new verification link has been sent.");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setResending(false);
+    }
   };
 
   return (
@@ -88,6 +107,18 @@ export default function Login() {
           >
             {submitting ? "Logging in…" : "Log in"}
           </Button>
+          {needsVerification && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={resendVerification}
+              disabled={resending}
+              data-testid="login-resend-verification-btn"
+              className="w-full h-11"
+            >
+              {resending ? "Sending…" : "Resend verification email"}
+            </Button>
+          )}
         </form>
         <p className="mt-6 text-sm text-stone-600">
           New to LKK?{" "}
