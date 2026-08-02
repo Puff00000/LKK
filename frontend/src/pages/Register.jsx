@@ -6,45 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "sonner";
-import { CheckCircle2, Smartphone } from "lucide-react";
-
-const STEPS = [
-  { n: 1, t: "Sign up" },
-  { n: 2, t: "Verify phone" },
-  { n: 3, t: "Complete profile" },
-];
-
-function StepIndicator({ step }) {
-  return (
-    <ol className="mb-6 flex items-center gap-3 text-xs">
-      {STEPS.map((s) => (
-        <li
-          key={s.n}
-          data-testid={`step-indicator-${s.n}`}
-          className={`flex items-center gap-1.5 ${step >= s.n ? "text-green-800" : "text-stone-400"}`}
-        >
-          <span
-            className={`grid h-5 w-5 place-items-center rounded-full text-[10px] font-medium ${
-              step > s.n
-                ? "bg-green-800 text-white"
-                : step === s.n
-                ? "bg-amber-500 text-white"
-                : "bg-stone-100 text-stone-500"
-            }`}
-          >
-            {step > s.n ? "✓" : s.n}
-          </span>
-          {s.t}
-        </li>
-      ))}
-    </ol>
-  );
-}
+import { MailCheck } from "lucide-react";
 
 export default function Register() {
-  const { register, refresh } = useAuth();
+  const { register } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const roleParam = searchParams.get("role");
@@ -63,27 +29,27 @@ export default function Register() {
   const isLocal = role === "local";
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [mockMode, setMockMode] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const headline = lockedRole
     ? isLocal
       ? step === 1
         ? "Sign up as a Local"
-        : step === 2
-        ? "Verify your phone"
-        : "Almost there"
-      : "Sign up as a Traveller"
-    : "Join LKK";
+        : "Check your email"
+      : step === 1
+      ? "Sign up as a Traveller"
+      : "Check your email"
+    : step === 1
+    ? "Join LKK"
+    : "Check your email";
   const subline = lockedRole
     ? isLocal
       ? step === 1
         ? "A few details to get you started."
-        : step === 2
-        ? "We sent a 6-digit code to your phone."
-        : "Add a bio, photo, expertise and price to go live."
-      : "Discover local guides in your destination city and book one in minutes."
+        : "Confirm your email, then log in to verify your phone and finish your profile."
+      : step === 1
+      ? "Discover local guides in your destination city and book one in minutes."
+      : "Confirm your email, then log in to start browsing."
     : "Travel like a local — or share your city as one.";
 
   // ---------- STEP 1: signup ------------------------------------------------
@@ -104,51 +70,26 @@ export default function Register() {
       toast.error(res.error);
       return;
     }
-    if (!isLocal) {
-      toast.success(`Welcome to LKK, ${res.user.name}`);
-      navigate(next || "/dashboard");
-      return;
-    }
-    // local flow → trigger OTP send and move to step 2
     setStep(2);
-    await sendOtp();
   };
 
-  // ---------- STEP 2: OTP ---------------------------------------------------
-  const sendOtp = async () => {
+  // ---------- STEP 2: check your email --------------------------------------
+  const resendEmail = async () => {
+    setResending(true);
     try {
-      const { data } = await api.post("/otp/send", { phone: form.phone });
-      setOtpSent(true);
-      setMockMode(!!data.mock);
-      toast.success(data.mock ? "OTP sent (mock mode — use 123456)" : "OTP sent to your phone");
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || e.message);
-    }
-  };
-
-  const verifyOtp = async (e) => {
-    e?.preventDefault?.();
-    if (otp.length < 4) return;
-    setSubmitting(true);
-    try {
-      await api.post("/otp/verify", { phone: form.phone, otp });
-      await refresh();
-      toast.success("Phone verified");
-      setStep(3);
+      await api.post("/auth/resend-verification", { email: form.email });
+      toast.success("If needed, a new verification link has been sent.");
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || e.message);
     } finally {
-      setSubmitting(false);
+      setResending(false);
     }
   };
-
-  // ---------- STEP 3: gateway to profile page -------------------------------
-  const goToProfile = () => navigate("/local/profile?welcome=1");
 
   return (
     <div className="mx-auto grid min-h-[80vh] max-w-md place-items-center px-4 py-12" data-testid="register-page">
       <div className="w-full">
-        {lockedRole && (
+        {lockedRole && step === 1 && (
           <div
             data-testid="register-role-pill"
             className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
@@ -165,8 +106,6 @@ export default function Register() {
           {headline}
         </h1>
         <p className="mt-2 text-stone-600">{subline}</p>
-
-        {isLocal && <div className="mt-6"><StepIndicator step={step} /></div>}
 
         {/* STEP 1 — sign up form */}
         {step === 1 && (
@@ -221,7 +160,7 @@ export default function Register() {
                       placeholder="98765 43210"
                     />
                   </div>
-                  <p className="mt-1 text-xs text-stone-500">We'll send you a one-time code.</p>
+                  <p className="mt-1 text-xs text-stone-500">You'll verify this with a one-time code after logging in.</p>
                 </div>
                 <div>
                   <Label htmlFor="city">City you can show people around</Label>
@@ -242,11 +181,7 @@ export default function Register() {
               disabled={submitting}
               className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
             >
-              {submitting
-                ? "Creating account…"
-                : isLocal
-                ? "Continue to phone verification"
-                : "Create traveller account"}
+              {submitting ? "Creating account…" : "Create account"}
             </Button>
 
             {lockedRole && (
@@ -264,70 +199,38 @@ export default function Register() {
           </form>
         )}
 
-        {/* STEP 2 — OTP */}
+        {/* STEP 2 — check your email */}
         {step === 2 && (
-          <div className="mt-6 space-y-5" data-testid="otp-step">
-            <div className="rounded-xl border border-stone-200 bg-white p-4 flex items-start gap-3">
-              <Smartphone className="h-5 w-5 mt-0.5 text-green-700" />
-              <div className="flex-1 text-sm">
-                <div className="text-stone-700">Code sent to <span className="font-medium text-stone-900">+91 {form.phone}</span></div>
-                {mockMode && (
-                  <div className="mt-1 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-                    Mock mode — use <span className="font-mono">123456</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <form onSubmit={verifyOtp} className="space-y-4">
-              <Label>Enter the 6-digit code</Label>
-              <div className="flex justify-center" data-testid="otp-input">
-                <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-                  <InputOTPGroup>
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <InputOTPSlot key={i} index={i} />
-                    ))}
-                  </InputOTPGroup>
-                </InputOTP>
-              </div>
-              <Button
-                type="submit"
-                data-testid="otp-verify-btn"
-                disabled={otp.length < 4 || submitting}
-                className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
-              >
-                {submitting ? "Verifying…" : "Verify & continue"}
-              </Button>
-              <div className="text-center text-sm">
-                <button
-                  type="button"
-                  data-testid="otp-resend-btn"
-                  onClick={sendOtp}
-                  className="text-green-800 hover:underline"
-                >
-                  Resend code
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* STEP 3 — done, jump to profile */}
-        {step === 3 && (
-          <div className="mt-6 space-y-5" data-testid="profile-handoff">
+          <div className="mt-6 space-y-5" data-testid="check-email-step">
             <div className="rounded-xl border border-green-200 bg-green-50 p-4 flex items-start gap-3">
-              <CheckCircle2 className="h-5 w-5 mt-0.5 text-green-700" />
+              <MailCheck className="h-5 w-5 mt-0.5 text-green-700" />
               <div className="text-sm">
-                <div className="font-medium text-green-900">Phone verified.</div>
-                <div className="text-green-900/80">Now add a bio, photo, expertise & price. Your profile goes live as <span className="font-semibold">Unverified</span> until 3 trips complete (or admin verifies).</div>
+                <div className="font-medium text-green-900">
+                  We've sent a link to <span className="font-semibold">{form.email}</span>
+                </div>
+                <div className="text-green-900/80 mt-1">
+                  Click it to activate your account, then come back and log in
+                  {isLocal ? " to verify your phone and finish your profile." : "."}
+                </div>
               </div>
             </div>
+
             <Button
-              data-testid="continue-profile-btn"
-              onClick={goToProfile}
+              data-testid="resend-verification-btn"
+              variant="outline"
+              onClick={resendEmail}
+              disabled={resending}
+              className="w-full h-11"
+            >
+              {resending ? "Sending…" : "Resend email"}
+            </Button>
+
+            <Button
+              data-testid="go-to-login-btn"
+              onClick={() => navigate(`/login?role=${role}${next ? `&next=${encodeURIComponent(next)}` : ""}`)}
               className="w-full h-12 bg-green-800 text-white hover:bg-green-900 hover:text-white"
             >
-              Complete profile
+              I've verified — take me to login
             </Button>
           </div>
         )}
