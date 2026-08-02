@@ -43,9 +43,7 @@ export function AuthProvider({ children }) {
   const register = async (payload) => {
     try {
       const { data } = await api.post("/auth/register", payload);
-      localStorage.setItem("lkk_token", data.token);
-      setUser(data.user);
-      return { ok: true, user: data.user };
+      return { ok: true, message: data.message, email: data.email };
     } catch (e) {
       return { ok: false, error: formatApiError(e.response?.data?.detail) || e.message };
     }
