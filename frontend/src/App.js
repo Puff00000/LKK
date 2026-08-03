@@ -5,6 +5,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import Navbar from "@/components/Navbar";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import RequireGuideProfile from "@/components/RequireGuideProfile";
+import RequirePhoneVerified from "@/components/RequirePhoneVerified";
 import Landing from "@/pages/Landing";
 import CreateTrip from "@/pages/CreateTrip";
 import TripDates from "@/pages/TripDates";
@@ -14,6 +15,7 @@ import GuideProfile from "@/pages/GuideProfile";
 import ServiceDetail from "@/pages/ServiceDetail";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
+import VerifyEmail from "@/pages/VerifyEmail";
 import BookingFlow from "@/pages/BookingFlow";
 import TravellerDashboard from "@/pages/TravellerDashboard";
 import LocalDashboard from "@/pages/LocalDashboard";
@@ -40,6 +42,7 @@ export default function App() {
             <Route path="/services/:id" element={<ServiceDetail />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/verify-email" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route
@@ -62,9 +65,11 @@ export default function App() {
               path="/local"
               element={
                 <ProtectedRoute roles={["local"]}>
-                  <RequireGuideProfile>
-                    <LocalDashboard />
-                  </RequireGuideProfile>
+                  <RequirePhoneVerified>
+                    <RequireGuideProfile>
+                      <LocalDashboard />
+                    </RequireGuideProfile>
+                  </RequirePhoneVerified>
                 </ProtectedRoute>
               }
             />
