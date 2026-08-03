@@ -583,21 +583,89 @@ async def register(request: Request, body: RegisterIn):
         user_id = str(uuid.uuid4())
         phone = normalize_phone(body.phone) if body.phone else None
         await conn.execute(
-            """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+            """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified,
+               email_verified, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
             user_id, email, body.name.strip(), body.role,
             hash_password(body.password), phone,
-            (body.city or "").strip() or None, False, datetime.now(timezone.utc)
+            (body.city or "").strip() or None, False, False, datetime.now(timezone.utc)
         )
-        user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
-    token = create_token(user_id, email, body.role)
-    # Send welcome email
+        verify_token = secrets.token_urlsafe(32)
+        await conn.execute(
+            "INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1, $2, $3)",
+            user_id, verify_token, datetime.now(timezone.utc) + timedelta(hours=24)
+        )
+    verify_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/verify-email?token={verify_token}"
     await send_email(
         email,
-        "Welcome to LKK 🌿",
-        f"<h2>Welcome to LKK, {body.name}!</h2><p>Travel like a local. We're glad you're here.</p>"
+        "Verify your email for LKK 🌿",
+        f"""
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2 style="color: #166534;">Welcome to LKK, {body.name}!</h2>
+            <p>Travel like a local. Confirm your email to activate your account:</p>
+            <a href="{verify_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
+                Verify email
+            </a>
+            <p style="color: #78716c; font-size: 14px;">This link expires in 24 hours. If you didn't create this account, ignore this email.</p>
+            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
+        </div>
+        """
     )
-    return {"token": token, "user": public_user(row_to_dict(user))}
+    return {"ok": True, "message": "Check your email to verify your account before logging in.", "email": email}
+
+class VerifyEmailIn(BaseModel):
+    token: str
+
+@api.post("/auth/verify-email")
+@limiter.limit("20/hour")
+async def verify_email(request: Request, body: VerifyEmailIn):
+    async with db_pool.acquire() as conn:
+        rec = await conn.fetchrow(
+            "SELECT * FROM email_verifications WHERE token = $1 AND used = FALSE", body.token
+        )
+        if not rec:
+            raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+        if rec["expires_at"].replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Verification link has expired. Request a new one.")
+        await conn.execute("UPDATE users SET email_verified = TRUE WHERE id = $1", str(rec["user_id"]))
+        await conn.execute("UPDATE email_verifications SET used = TRUE WHERE token = $1", body.token)
+    return {"ok": True, "message": "Email verified — you can now log in."}
+
+class ResendVerificationIn(BaseModel):
+    email: EmailStr
+
+@api.post("/auth/resend-verification")
+@limiter.limit("5/hour")
+async def resend_verification(request: Request, body: ResendVerificationIn):
+    email = body.email.lower()
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
+        # Same response regardless of outcome — don't reveal account existence or verification state
+        if not user or user["email_verified"]:
+            return {"ok": True, "message": "If that email needs verifying, a new link has been sent."}
+        verify_token = secrets.token_urlsafe(32)
+        await conn.execute("DELETE FROM email_verifications WHERE user_id = $1", str(user["id"]))
+        await conn.execute(
+            "INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1, $2, $3)",
+            str(user["id"]), verify_token, datetime.now(timezone.utc) + timedelta(hours=24)
+        )
+    verify_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/verify-email?token={verify_token}"
+    await send_email(
+        email,
+        "Verify your email for LKK 🌿",
+        f"""
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2 style="color: #166534;">Confirm your email</h2>
+            <p>Hi {user['name']},</p>
+            <a href="{verify_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
+                Verify email
+            </a>
+            <p style="color: #78716c; font-size: 14px;">This link expires in 24 hours.</p>
+            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
+        </div>
+        """
+    )
+    return {"ok": True, "message": "If that email needs verifying, a new link has been sent."}
 
 @api.post("/auth/login")
 @limiter.limit("10/minute")
@@ -609,6 +677,8 @@ async def login(request: Request, body: LoginIn):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user["is_banned"]:
         raise HTTPException(status_code=403, detail="Your account has been suspended. Contact support if you believe this is a mistake.")
+    if not user["email_verified"]:
+        raise HTTPException(status_code=403, detail="Please verify your email before logging in. Check your inbox, or request a new link.")
     user_dict = row_to_dict(user)
     token = create_token(str(user["id"]), user["email"], user["role"])
     return {"token": token, "user": public_user(user_dict)}
