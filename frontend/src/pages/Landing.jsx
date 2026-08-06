@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ArrowRight, MessageCircle, MapPinned, Sparkles, ShieldCheck, IndianRupee, Star } from "lucide-react";
@@ -62,6 +63,8 @@ export default function Landing() {
   const [demoHours, setDemoHours] = useState(3);
   const demoPrice = 499 + (demoHours - 2) * 250;
   const location = useLocation();
+  const { user } = useAuth();
+  const dashboardPath = user?.role === "admin" ? "/admin" : user?.role === "local" ? "/local" : "/dashboard";
 
   useEffect(() => {
     if (location.hash) {
@@ -111,15 +114,27 @@ export default function Landing() {
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
-                <Link to="/login">
-                  <Button
-                    data-testid="hero-login-btn"
-                    variant="outline"
-                    className="h-12 border-stone-300 px-6 text-stone-800 hover:bg-stone-50"
-                  >
-                    Log in
-                  </Button>
-                </Link>
+                {user ? (
+                  <Link to={dashboardPath}>
+                    <Button
+                      data-testid="hero-dashboard-btn"
+                      variant="outline"
+                      className="h-12 border-stone-300 px-6 text-stone-800 hover:bg-stone-50"
+                    >
+                      Go to dashboard
+                    </Button>
+                  </Link>
+                ) : (
+                  <Link to="/login">
+                    <Button
+                      data-testid="hero-login-btn"
+                      variant="outline"
+                      className="h-12 border-stone-300 px-6 text-stone-800 hover:bg-stone-50"
+                    >
+                      Log in
+                    </Button>
+                  </Link>
+                )}
                 <Link to="/create-trip">
                   <Button
                     data-testid="hero-get-started-btn"
