@@ -48,6 +48,9 @@ RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 RAZORPAY_X_ACCOUNT_NUMBER = os.environ.get("RAZORPAY_X_ACCOUNT_NUMBER", "")
 RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
 OTP_MOCK_CODE = "123456"
+MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
+MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "")
+MSG91_API_BASE = "https://control.msg91.com/api/v5"
 
 # --- Service pricing ---------------------------------------------------
 # In-person only. 2 hours minimum, 8 hours maximum.
@@ -279,6 +282,65 @@ async def send_email(to: str, subject: str, html: str):
         )
     if resp.status_code != 200:
         logger.warning("Email send failed: %s", resp.text)
+
+# --- SMS OTP via MSG91 -------------------------------------------------------
+# MSG91 handles OTP generation, expiry, and attempt-limiting on their side — we
+# just call their send/verify/resend endpoints and reflect the result. Falls
+# back to the old mock (always "123456") if MSG91_AUTH_KEY isn't configured,
+# same convention as send_email() falling back when RESEND_API_KEY is unset —
+# keeps local/dev testing working without needing real credentials.
+def _msg91_mobile(phone: str) -> str:
+    """MSG91 expects the number with country code, no '+', e.g. 919876543210."""
+    digits = phone.strip()
+    if digits.startswith("+"):
+        digits = digits[1:]
+    if not digits.startswith("91"):
+        digits = "91" + digits
+    return digits
+
+async def send_otp_sms(phone: str) -> dict:
+    if not MSG91_AUTH_KEY or not MSG91_TEMPLATE_ID:
+        logger.info("[OTP MOCK] code for %s is %s", phone, OTP_MOCK_CODE)
+        return {"mock": True}
+    async with httpx.AsyncClient(timeout=15) as cli:
+        resp = await cli.post(
+            f"{MSG91_API_BASE}/otp",
+            headers={"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"},
+            json={"template_id": MSG91_TEMPLATE_ID, "mobile": _msg91_mobile(phone), "otp_length": 6},
+        )
+    data = resp.json() if resp.content else {}
+    if resp.status_code != 200 or data.get("type") != "success":
+        logger.warning("MSG91 OTP send failed: %s", data)
+        raise HTTPException(status_code=502, detail="Couldn't send verification code. Try again in a moment.")
+    return {"mock": False}
+
+async def verify_otp_sms(phone: str, otp: str) -> bool:
+    if not MSG91_AUTH_KEY or not MSG91_TEMPLATE_ID:
+        return otp.strip() == OTP_MOCK_CODE
+    async with httpx.AsyncClient(timeout=15) as cli:
+        resp = await cli.get(
+            f"{MSG91_API_BASE}/otp/verify",
+            headers={"authkey": MSG91_AUTH_KEY},
+            params={"otp": otp.strip(), "mobile": _msg91_mobile(phone)},
+        )
+    data = resp.json() if resp.content else {}
+    return resp.status_code == 200 and data.get("type") == "success"
+
+async def resend_otp_sms(phone: str, retry_type: str = "text") -> dict:
+    if not MSG91_AUTH_KEY or not MSG91_TEMPLATE_ID:
+        logger.info("[OTP MOCK] resend code for %s is %s", phone, OTP_MOCK_CODE)
+        return {"mock": True}
+    async with httpx.AsyncClient(timeout=15) as cli:
+        resp = await cli.post(
+            f"{MSG91_API_BASE}/otp/retry",
+            headers={"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"},
+            json={"mobile": _msg91_mobile(phone), "retrytype": retry_type},
+        )
+    data = resp.json() if resp.content else {}
+    if resp.status_code != 200 or data.get("type") != "success":
+        logger.warning("MSG91 OTP resend failed: %s", data)
+        raise HTTPException(status_code=502, detail="Couldn't resend the code. Try again in a moment.")
+    return {"mock": False}
 
 # --- Auth ------------------------------------------------------------------
 async def get_current_user(
@@ -777,22 +839,26 @@ async def delete_account(request: Request, body: AccountDeleteIn, user: dict = D
 
     return {"ok": True}
 
-# --- OTP (mock for now) ----------------------------------------------------
+# --- OTP (real via MSG91, falls back to mock if unconfigured) --------------
 @api.post("/otp/send")
-async def otp_send(body: OTPSendIn, user: dict = Depends(get_current_user)):
+@limiter.limit("5/hour")
+async def otp_send(request: Request, body: OTPSendIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
     async with db_pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET phone = $1, phone_verified = FALSE WHERE id = $2",
             phone, str(user["id"])
         )
-    logger.info("[OTP MOCK] code for %s is %s", phone, OTP_MOCK_CODE)
-    return {"ok": True, "phone": phone, "mock": True, "message": "Mock OTP sent. Use 123456."}
+    result = await send_otp_sms(phone)
+    if result.get("mock"):
+        return {"ok": True, "phone": phone, "mock": True, "message": "Mock OTP sent. Use 123456."}
+    return {"ok": True, "phone": phone, "mock": False, "message": "Code sent."}
 
 @api.post("/otp/verify")
-async def otp_verify(body: OTPVerifyIn, user: dict = Depends(get_current_user)):
+@limiter.limit("10/hour")
+async def otp_verify(request: Request, body: OTPVerifyIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
-    if body.otp.strip() != OTP_MOCK_CODE:
+    if not await verify_otp_sms(phone, body.otp):
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
     async with db_pool.acquire() as conn:
         await conn.execute(
@@ -803,10 +869,11 @@ async def otp_verify(body: OTPVerifyIn, user: dict = Depends(get_current_user)):
     return {"ok": True, "user": public_user(row_to_dict(fresh))}
 
 @api.post("/otp/resend")
-async def otp_resend(body: OTPSendIn, user: dict = Depends(get_current_user)):
+@limiter.limit("5/hour")
+async def otp_resend(request: Request, body: OTPSendIn, user: dict = Depends(get_current_user)):
     phone = normalize_phone(body.phone)
-    logger.info("[OTP MOCK] resend code for %s is %s", phone, OTP_MOCK_CODE)
-    return {"ok": True, "mock": True}
+    result = await resend_otp_sms(phone)
+    return {"ok": True, "mock": result.get("mock", False)}
 
 # --- File upload -----------------------------------------------------------
 MIME_BY_EXT = {
