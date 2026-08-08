@@ -4,7 +4,7 @@ import { api, inr } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import { Star, MapPin, Clock, ArrowLeft, ShieldCheck, ShieldAlert, IndianRupee } from "lucide-react";
+import { Star, MapPin, Clock, ArrowLeft, ShieldCheck, ShieldAlert, IndianRupee, Pencil } from "lucide-react";
 
 const CATEGORY_LABELS = {
   food: "🍜 Food & Drink",
@@ -183,13 +183,28 @@ export default function ServiceDetail() {
             <p className="mt-2 text-sm text-stone-600 leading-relaxed">
               Covers {service.guide_name.split(" ")[0]}'s time only. In-person meetup, {service.duration_hours} hours.
             </p>
-            <Button
-              data-testid="book-service-btn"
-              onClick={handleBook}
-              className="mt-4 w-full h-11 bg-green-800 text-white hover:bg-green-900 hover:text-white"
-            >
-              Book for {inr(service.price)}
-            </Button>
+            {service.is_own_listing ? (
+              <>
+                <Button
+                  data-testid="edit-own-listing-btn"
+                  onClick={() => navigate("/local")}
+                  variant="outline"
+                  className="mt-4 w-full h-11 border-stone-300"
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  This is your listing — manage it
+                </Button>
+                <p className="mt-2 text-center text-xs text-stone-400">You can't book your own experience.</p>
+              </>
+            ) : (
+              <Button
+                data-testid="book-service-btn"
+                onClick={handleBook}
+                className="mt-4 w-full h-11 bg-green-800 text-white hover:bg-green-900 hover:text-white"
+              >
+                Book for {inr(service.price)}
+              </Button>
+            )}
           </div>
           <ul className="rounded-xl border border-stone-200 bg-stone-50 p-4 space-y-2 text-xs text-stone-600">
             <li>✓ Payment held until you confirm the meetup happened</li>
