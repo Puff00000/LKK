@@ -32,7 +32,6 @@ export default function Browse() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [services, setServices] = useState([]);
-  const [cities, setCities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState("");
   const [tripDraft, setLocalTripDraft] = useState(() => getTripDraft());
@@ -48,10 +47,6 @@ export default function Browse() {
   useEffect(() => {
     // Refresh in case the draft changed since last visit (e.g. they went back and edited it)
     setLocalTripDraft(getTripDraft());
-  }, []);
-
-  useEffect(() => {
-    api.get("/guides/cities").then(({ data }) => setCities(data));
   }, []);
 
   useEffect(() => {
@@ -172,12 +167,8 @@ export default function Browse() {
               value={citySearch}
               onChange={(e) => setCitySearch(e.target.value)}
               placeholder="e.g. Jaipur, Goa..."
-              list="browse-cities"
               className="w-full mt-0.5 text-sm text-stone-900 placeholder:text-stone-400 bg-transparent outline-none"
             />
-            <datalist id="browse-cities">
-              {cities.map((c) => <option key={c} value={c} />)}
-            </datalist>
           </div>
         </div>
         <div className="flex items-center justify-center px-5 py-4">
