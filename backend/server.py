@@ -308,6 +308,19 @@ async def get_current_user(
         raise HTTPException(status_code=403, detail="Your account has been suspended. Contact support if you believe this is a mistake.")
     return row_to_dict(user)
 
+async def get_current_user_optional(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+) -> Optional[dict]:
+    """Same as get_current_user, but returns None instead of raising when
+    there's no token / it's invalid — for endpoints that serve both anonymous
+    visitors and logged-in users, but behave slightly differently for each
+    (e.g. Browse excluding a local's own listing from their own results)."""
+    try:
+        return await get_current_user(request, creds)
+    except HTTPException:
+        return None
+
 def require_role(*roles: str):
     async def dep(user: dict = Depends(get_current_user)) -> dict:
         if user["role"] not in roles:
@@ -1120,9 +1133,11 @@ async def list_services(
     max_duration: Optional[int] = None,
     guide_id: Optional[str] = None,
     sort: Optional[str] = "newest",
+    user: Optional[dict] = Depends(get_current_user_optional),
 ):
-    query = """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
-               g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified
+    query = """SELECT s.*, g.user_id AS guide_user_id, g.name AS guide_name, g.city AS guide_city,
+               g.avatar_url AS guide_avatar_url, g.rating AS guide_rating, g.review_count AS guide_review_count,
+               g.verified AS guide_verified
                FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
                WHERE s.is_active = TRUE AND g.is_complete = TRUE AND u.is_banned = FALSE"""
     params = []
@@ -1159,18 +1174,25 @@ async def list_services(
     result = []
     for row in rows:
         d = row_to_dict(row)
+        # A local browsing the marketplace shouldn't see their own listing
+        # mixed in as if it were someone else's — and the "Book" button on it
+        # would just 403 anyway, since only travellers can create bookings.
+        if user and user["role"] == "local" and str(d["guide_user_id"]) == str(user["id"]):
+            continue
+        d.pop("guide_user_id", None)
         d["id"] = str(d["id"])
         d["guide_id"] = str(d["guide_id"])
         result.append(d)
     return result
 
 @api.get("/services/{service_id}")
-async def get_service(service_id: str):
+async def get_service(service_id: str, user: Optional[dict] = Depends(get_current_user_optional)):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT s.*, g.name AS guide_name, g.city AS guide_city, g.avatar_url AS guide_avatar_url,
-               g.rating AS guide_rating, g.review_count AS guide_review_count, g.verified AS guide_verified,
-               g.bio AS guide_bio, g.video_url AS guide_video_url, g.video_approved AS guide_video_approved
+            """SELECT s.*, g.user_id AS guide_user_id, g.name AS guide_name, g.city AS guide_city,
+               g.avatar_url AS guide_avatar_url, g.rating AS guide_rating, g.review_count AS guide_review_count,
+               g.verified AS guide_verified, g.bio AS guide_bio, g.video_url AS guide_video_url,
+               g.video_approved AS guide_video_approved
                FROM services s JOIN guides g ON g.id = s.guide_id JOIN users u ON u.id = g.user_id
                WHERE s.id = $1 AND u.is_banned = FALSE""",
             service_id
@@ -1178,6 +1200,8 @@ async def get_service(service_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Service not found")
     out = _service_out(row)
+    out["is_own_listing"] = bool(user and str(out.get("guide_user_id")) == str(user["id"]))
+    out.pop("guide_user_id", None)
     # Only ever surface a video publicly once an admin has approved it
     if not out.get("guide_video_approved"):
         out["guide_video_url"] = None
