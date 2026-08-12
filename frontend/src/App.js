@@ -57,7 +57,9 @@ export default function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute roles={["traveller"]}>
-                  <TravellerDashboard />
+                  <RequirePhoneVerified>
+                    <TravellerDashboard />
+                  </RequirePhoneVerified>
                 </ProtectedRoute>
               }
             />
