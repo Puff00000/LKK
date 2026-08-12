@@ -46,15 +46,22 @@ export default function Register() {
     ? isLocal
       ? step === 1
         ? "A few details to get you started."
-        : "Confirm your email, then log in to verify your phone and finish your profile."
+        : "Confirm your email, then log in to finish your profile."
       : step === 1
       ? "Discover local guides in your destination city and book one in minutes."
-      : "Confirm your email, then log in to verify your phone and start browsing."
+      : "Confirm your email, then log in to start browsing."
     : "Travel like a local — or share your city as one.";
+
+  // Indian mobile numbers: 10 digits, starting with 6, 7, 8, or 9.
+  const isValidIndianMobile = (number) => /^[6-9]\d{9}$/.test(number);
 
   // ---------- STEP 1: signup ------------------------------------------------
   const submitSignup = async (e) => {
     e.preventDefault();
+    if (!isValidIndianMobile(form.phone)) {
+      toast.error("Enter a valid 10-digit Indian mobile number (starting with 6-9).");
+      return;
+    }
     setSubmitting(true);
     const payload = {
       name: form.name,
@@ -158,7 +165,9 @@ export default function Register() {
                   placeholder="98765 43210"
                 />
               </div>
-              <p className="mt-1 text-xs text-stone-500">You'll verify this with a one-time code after logging in.</p>
+              {form.phone.length === 10 && !isValidIndianMobile(form.phone) && (
+                <p className="mt-1 text-xs text-red-600">Should start with 6, 7, 8, or 9.</p>
+              )}
             </div>
 
             {isLocal && (
@@ -208,8 +217,8 @@ export default function Register() {
                   We've sent a link to <span className="font-semibold">{form.email}</span>
                 </div>
                 <div className="text-green-900/80 mt-1">
-                  Click it to activate your account, then come back and log in to verify your phone
-                  {isLocal ? " and finish your profile." : "."}
+                  Click it to activate your account, then come back and log in
+                  {isLocal ? " to finish your profile." : "."}
                 </div>
               </div>
             </div>
