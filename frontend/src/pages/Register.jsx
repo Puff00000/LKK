@@ -49,7 +49,7 @@ export default function Register() {
         : "Confirm your email, then log in to verify your phone and finish your profile."
       : step === 1
       ? "Discover local guides in your destination city and book one in minutes."
-      : "Confirm your email, then log in to start browsing."
+      : "Confirm your email, then log in to verify your phone and start browsing."
     : "Travel like a local — or share your city as one.";
 
   // ---------- STEP 1: signup ------------------------------------------------
@@ -142,31 +142,30 @@ export default function Register() {
               <Input id="email" type="email" data-testid="register-email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required className="mt-1.5" />
             </div>
 
+            <div>
+              <Label htmlFor="phone">Phone (Indian, 10 digits)</Label>
+              <div className="mt-1.5 flex">
+                <span className="inline-flex items-center rounded-l-md border border-r-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-600">+91</span>
+                <Input
+                  id="phone"
+                  data-testid="register-phone"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                  required
+                  className="rounded-l-none"
+                  placeholder="98765 43210"
+                />
+              </div>
+              <p className="mt-1 text-xs text-stone-500">You'll verify this with a one-time code after logging in.</p>
+            </div>
+
             {isLocal && (
-              <>
-                <div>
-                  <Label htmlFor="phone">Phone (Indian, 10 digits)</Label>
-                  <div className="mt-1.5 flex">
-                    <span className="inline-flex items-center rounded-l-md border border-r-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-600">+91</span>
-                    <Input
-                      id="phone"
-                      data-testid="register-phone"
-                      inputMode="numeric"
-                      maxLength={10}
-                      value={form.phone}
-                      onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
-                      required
-                      className="rounded-l-none"
-                      placeholder="98765 43210"
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-stone-500">You'll verify this with a one-time code after logging in.</p>
-                </div>
-                <div>
-                  <Label htmlFor="city">City you can show people around</Label>
-                  <Input id="city" data-testid="register-city" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} required placeholder="e.g. Jaipur" className="mt-1.5" />
-                </div>
-              </>
+              <div>
+                <Label htmlFor="city">City you can show people around</Label>
+                <Input id="city" data-testid="register-city" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} required placeholder="e.g. Jaipur" className="mt-1.5" />
+              </div>
             )}
 
             <div>
@@ -209,8 +208,8 @@ export default function Register() {
                   We've sent a link to <span className="font-semibold">{form.email}</span>
                 </div>
                 <div className="text-green-900/80 mt-1">
-                  Click it to activate your account, then come back and log in
-                  {isLocal ? " to verify your phone and finish your profile." : "."}
+                  Click it to activate your account, then come back and log in to verify your phone
+                  {isLocal ? " and finish your profile." : "."}
                 </div>
               </div>
             </div>
