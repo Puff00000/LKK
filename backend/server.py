@@ -121,12 +121,15 @@ def public_user(doc: dict) -> dict:
 def normalize_phone(raw: str) -> str:
     digits = re.sub(r"\D", "", raw or "")
     if digits.startswith("91") and len(digits) == 12:
-        return digits
-    if len(digits) == 10:
-        return f"91{digits}"
-    if digits.startswith("0") and len(digits) == 11:
-        return f"91{digits[1:]}"
-    raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian phone number")
+        digits = digits[2:]
+    elif digits.startswith("0") and len(digits) == 11:
+        digits = digits[1:]
+    # Valid Indian mobile numbers are 10 digits starting with 6, 7, 8, or 9.
+    # No OTP verification happens anymore — this format check is the only
+    # validation a phone number gets, so it needs to actually be strict.
+    if not re.fullmatch(r"[6-9]\d{9}", digits):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number")
+    return f"91{digits}"
 
 def parse_date(raw: str, field_name: str = "date") -> date:
     """Convert an incoming 'YYYY-MM-DD' string to a native date object.
@@ -622,13 +625,19 @@ async def register(request: Request, body: RegisterIn):
             raise HTTPException(status_code=400, detail="Email already registered")
         user_id = str(uuid.uuid4())
         phone = normalize_phone(body.phone) if body.phone else None
+        # Phone OTP verification (Firebase Phone Auth) has been removed — it
+        # required a paid Blaze plan we don't need yet. Email verification
+        # (below) is now the only identity check; phone is still mandatory
+        # and format-validated by normalize_phone(), but we no longer gate
+        # dashboard access on a separate phone-verified step, so this is
+        # set True at registration rather than left permanently False.
         await conn.execute(
             """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified,
                email_verified, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
             user_id, email, body.name.strip(), body.role,
             hash_password(body.password), phone,
-            (body.city or "").strip() or None, False, False, datetime.now(timezone.utc)
+            (body.city or "").strip() or None, True, False, datetime.now(timezone.utc)
         )
         verify_token = secrets.token_urlsafe(32)
         await conn.execute(
