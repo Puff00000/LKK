@@ -1,6 +1,4 @@
 import { useState } from "react";
-import { RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
-import { firebaseAuth } from "@/lib/firebase";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -13,12 +11,6 @@ import { ShieldCheck } from "lucide-react";
  * see anything else — this used to happen right after registering (while
  * auto-logged-in), but now that registration requires email verification
  * first, this step moved to right after a real login instead.
- *
- * SMS delivery + code verification is handled entirely by Firebase Phone
- * Auth (no DLT registration needed on our end, since Google is the
- * registered sender). Firebase gives us back an ID token proving the phone
- * was verified; we send that token to our own backend, which checks it and
- * flips phone_verified in our DB.
  */
 export default function RequirePhoneVerified({ children }) {
   const { user, refresh } = useAuth();
@@ -32,17 +24,11 @@ export default function RequirePhoneVerified({ children }) {
   const sendOtp = async () => {
     setSending(true);
     try {
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(firebaseAuth, "recaptcha-container", {
-          size: "invisible",
-        });
-      }
-      const result = await signInWithPhoneNumber(firebaseAuth, `+91${user.phone}`, window.recaptchaVerifier);
-      window.confirmationResult = result;
+      await api.post("/otp/send", { phone: user.phone });
       setOtpSent(true);
       toast.success("Code sent.");
     } catch (e) {
-      toast.error(e.message || "Couldn't send the code. Try again.");
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
     } finally {
       setSending(false);
     }
@@ -52,9 +38,7 @@ export default function RequirePhoneVerified({ children }) {
     if (otp.length < 4) return;
     setVerifying(true);
     try {
-      const result = await window.confirmationResult.confirm(otp);
-      const idToken = await result.user.getIdToken();
-      await api.post("/phone/verify", { phone: user.phone, firebase_id_token: idToken });
+      await api.post("/otp/verify", { phone: user.phone, otp });
       toast.success("Phone verified!");
       await refresh();
     } catch (e) {
@@ -115,9 +99,6 @@ export default function RequirePhoneVerified({ children }) {
             </button>
           </div>
         )}
-
-        {/* Invisible reCAPTCHA required by Firebase Phone Auth — no UI, just needs to exist in the DOM */}
-        <div id="recaptcha-container" />
       </div>
     </div>
   );
