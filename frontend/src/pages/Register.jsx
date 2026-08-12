@@ -59,7 +59,7 @@ export default function Register() {
   const submitSignup = async (e) => {
     e.preventDefault();
     if (!isValidIndianMobile(form.phone)) {
-      toast.error("Enter a valid 10-digit Indian mobile number (starting with 6-9).");
+      toast.error("Enter a valid 10-digit Indian mobile number.");
       return;
     }
     setSubmitting(true);
