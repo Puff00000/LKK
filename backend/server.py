@@ -614,6 +614,8 @@ async def shutdown() -> None:
 @limiter.limit("10/hour")
 async def register(request: Request, body: RegisterIn):
     email = body.email.lower()
+    if not (body.phone or "").strip():
+        raise HTTPException(status_code=400, detail="A phone number is required to register.")
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
         if existing:
