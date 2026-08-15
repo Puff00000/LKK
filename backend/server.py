@@ -727,20 +727,42 @@ async def register(request: Request, body: RegisterIn):
             raise HTTPException(status_code=400, detail="Email already registered")
         user_id = str(uuid.uuid4())
         phone = normalize_phone(body.phone) if body.phone else None
+        if phone:
+            existing_phone = await conn.fetchrow("SELECT id FROM users WHERE phone = $1", phone)
+            if existing_phone:
+                logger.info("Registration blocked: phone %s already registered", phone)
+                raise HTTPException(status_code=400, detail="This phone number is already registered")
         # Phone OTP verification (Firebase Phone Auth) has been removed — it
         # required a paid Blaze plan we don't need yet. Email verification
         # (below) is now the only identity check; phone is still mandatory
         # and format-validated by normalize_phone(), but we no longer gate
         # dashboard access on a separate phone-verified step, so this is
         # set True at registration rather than left permanently False.
-        await conn.execute(
-            """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified,
-               email_verified, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-            user_id, email, body.name.strip(), body.role,
-            hash_password(body.password), phone,
-            (body.city or "").strip() or None, True, False, datetime.now(timezone.utc)
-        )
+        try:
+            await conn.execute(
+                """INSERT INTO users (id, email, name, role, password_hash, phone, city, phone_verified,
+                   email_verified, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                user_id, email, body.name.strip(), body.role,
+                hash_password(body.password), phone,
+                (body.city or "").strip() or None, True, False, datetime.now(timezone.utc)
+            )
+        except asyncpg.UniqueViolationError as e:
+            # Safety net for the race where two requests pass the pre-checks above
+            # at the same instant — the DB constraint is the real source of truth.
+            # Without this, the raw UniqueViolationError propagates as an
+            # unhandled 500, which is why registration was silently failing:
+            # the user got a generic error and the logs showed a stack trace
+            # instead of a clear reason.
+            constraint = getattr(e, "constraint_name", "") or ""
+            if "phone" in constraint:
+                logger.warning("Registration race on phone %s: %s", phone, e)
+                raise HTTPException(status_code=400, detail="This phone number is already registered")
+            if "email" in constraint:
+                logger.warning("Registration race on email %s: %s", email, e)
+                raise HTTPException(status_code=400, detail="Email already registered")
+            logger.error("Registration failed on unique constraint %s: %s", constraint, e)
+            raise HTTPException(status_code=400, detail="An account with these details already exists")
         verify_token = secrets.token_urlsafe(32)
         await conn.execute(
             "INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1, $2, $3)",
