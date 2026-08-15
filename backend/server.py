@@ -667,7 +667,19 @@ async def seed_demo_data() -> None:
         count = await conn.fetchval("SELECT COUNT(*) FROM guides")
         if count > 0:
             return
+        seeded = 0
         for d in DEMO_LOCALS:
+            # Defense-in-depth: the guides-count check above is only a fast
+            # path. If a prior deploy partially seeded (e.g. inserted the
+            # user row but crashed/was interrupted before the guide row), the
+            # guides table can still read as empty while this email already
+            # exists in users — which previously caused an unhandled
+            # UniqueViolationError here on every startup (crash-loop). Check
+            # per-user so a partial prior seed can't ever crash the app.
+            existing_user = await conn.fetchrow("SELECT id FROM users WHERE email = $1", d["email"])
+            if existing_user:
+                logger.info("Demo user %s already exists, skipping re-seed", d["email"])
+                continue
             user_id = str(uuid.uuid4())
             guide_id = str(uuid.uuid4())
             await conn.execute(
@@ -700,7 +712,8 @@ async def seed_demo_data() -> None:
                     s.get("extra_transport_min"), s.get("extra_transport_max"),
                     s.get("cost_note", ""), True, datetime.now(timezone.utc)
                 )
-        logger.info("Seeded %d demo guides with services", len(DEMO_LOCALS))
+            seeded += 1
+        logger.info("Seeded %d demo guides with services (%d already existed)", seeded, len(DEMO_LOCALS) - seeded)
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
