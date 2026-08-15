@@ -371,14 +371,6 @@ def render_email(heading: str, body_html: str, cta_text: str = None, cta_url: st
                 </table>
               </td>
             </tr>
-            <tr>
-              <td style="padding:16px 28px;border-top:1px solid {_EMAIL_HAIRLINE};">
-                <p style="margin:0;font-size:12.5px;color:{_EMAIL_MUTED};font-family:{_EMAIL_FONT};">
-                  LKK — Log kya kahenge.<br/>
-                  <a href="mailto:{SUPPORT_EMAIL}" style="color:{_EMAIL_MUTED};">{SUPPORT_EMAIL}</a>
-                </p>
-              </td>
-            </tr>
           </table>
         </td>
       </tr>
