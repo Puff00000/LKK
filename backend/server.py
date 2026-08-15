@@ -271,6 +271,8 @@ async def razorpay_trigger_validation(fund_account_id: str) -> dict:
         raise HTTPException(status_code=502, detail="Could not start bank verification right now. Please try again.")
     return resp.json()
 # --- Email via Resend ------------------------------------------------------
+SUPPORT_EMAIL = "support@lkk.co.in"
+
 async def send_email(to: str, subject: str, html: str):
     if not RESEND_API_KEY:
         logger.info("[EMAIL MOCK] To: %s | Subject: %s", to, subject)
@@ -279,10 +281,110 @@ async def send_email(to: str, subject: str, html: str):
         resp = await cli.post(
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-            json={"from": "LKK <hello@lkk.co.in>", "to": to, "subject": subject, "html": html},
+            json={"from": "LKK <noreply@lkk.co.in>", "to": to, "subject": subject, "html": html},
         )
     if resp.status_code != 200:
         logger.warning("Email send failed: %s", resp.text)
+
+def first_name(full_name: str) -> str:
+    """'Samriddhi Pradhan' -> 'Samriddhi'. Falls back to 'there' if empty."""
+    return (full_name or "").strip().split(" ")[0] or "there"
+
+# --- Shared branded email template ------------------------------------------
+# Every transactional email (verification, bookings, payments, moderation,
+# password reset...) is rendered through this one function, so the LKK look
+# and the greeting/sign-off/footer stay consistent everywhere, and there's a
+# single place to restyle it later.
+# To change how ALL emails look, or the sign-off/footer wording: edit this
+# function. To change what ONE email says: edit its render_email(...) call
+# below — you only need to write the middle part (greeting through button).
+_EMAIL_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+_EMAIL_GREEN = "#166534"
+_EMAIL_INK = "#1c1917"
+_EMAIL_MUTED = "#78716c"
+_EMAIL_BG = "#f5f3ef"
+_EMAIL_HAIRLINE = "#f0ece3"
+# Served from frontend/public/lkk-email-logo.png by Vercel — must be a real,
+# publicly reachable URL since email clients can't load local files.
+_EMAIL_LOGO_URL = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/lkk-email-logo.png"
+
+def render_email(heading: str, body_html: str, cta_text: str = None, cta_url: str = None, footnote_html: str = "", preheader: str = "") -> str:
+    """Wrap email content in the LKK-branded shell (logo header, card, sign-off, footer).
+
+    heading:      short bold line at the top of the card, e.g. "Verify Your Email"
+    body_html:    the greeting + message paragraphs, shown ABOVE the button
+    cta_text/cta_url: optional button, e.g. ("Verify My Email", ".../verify?token=...")
+    footnote_html: optional small-print paragraphs shown BELOW the button
+                   (expiry notices, "if you didn't request this..." lines, etc.)
+    preheader:    short hidden preview text shown in inbox lists (optional)
+    """
+    button = ""
+    if cta_url and cta_text:
+        button = f"""
+                  <tr>
+                    <td style="padding: 10px 0 2px;">
+                      <a href="{cta_url}" style="display:inline-block;background:{_EMAIL_GREEN};color:#ffffff;padding:12px 26px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;font-family:{_EMAIL_FONT};">
+                        {cta_text}
+                      </a>
+                    </td>
+                  </tr>"""
+    footnote = ""
+    if footnote_html:
+        footnote = f"""
+                  <tr>
+                    <td style="font-size:13.5px;line-height:1.55;color:{_EMAIL_MUTED};padding-top:14px;font-family:{_EMAIL_FONT};">
+                      {footnote_html}
+                    </td>
+                  </tr>"""
+    return f"""<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:{_EMAIL_BG};font-family:{_EMAIL_FONT};">
+    <span style="display:none;font-size:1px;color:{_EMAIL_BG};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{preheader}</span>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_EMAIL_BG};padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;max-width:480px;width:100%;">
+            <tr>
+              <td style="background:{_EMAIL_GREEN};padding:36px 28px;text-align:center;">
+                <img src="{_EMAIL_LOGO_URL}" width="96" height="96" alt="LKK" style="display:block;margin:0 auto;border-radius:20px;border:0;" />
+                <div style="color:rgba(255,255,255,0.75);font-size:13px;margin-top:10px;font-family:{_EMAIL_FONT};">Log kya kahenge</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px 28px 26px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="font-size:20px;font-weight:700;color:{_EMAIL_INK};padding-bottom:10px;font-family:{_EMAIL_FONT};">
+                      {heading}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="font-size:15px;line-height:1.6;color:#44403c;font-family:{_EMAIL_FONT};">
+                      {body_html}
+                    </td>
+                  </tr>{button}{footnote}
+                  <tr>
+                    <td style="font-size:15px;line-height:1.6;color:#44403c;padding-top:22px;font-family:{_EMAIL_FONT};">
+                      Best regards,<br/>Team LKK
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 28px;border-top:1px solid {_EMAIL_HAIRLINE};">
+                <p style="margin:0;font-size:12.5px;color:{_EMAIL_MUTED};font-family:{_EMAIL_FONT};">
+                  LKK — Log kya kahenge.<br/>
+                  <a href="mailto:{SUPPORT_EMAIL}" style="color:{_EMAIL_MUTED};">{SUPPORT_EMAIL}</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
 
 # --- Phone verification via Firebase ----------------------------------------
 # Firebase handles SMS delivery through Google's own registered sender — no
@@ -647,18 +749,23 @@ async def register(request: Request, body: RegisterIn):
     verify_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/verify-email?token={verify_token}"
     await send_email(
         email,
-        "Verify your email for LKK 🌿",
-        f"""
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #166534;">Welcome to LKK, {body.name}!</h2>
-            <p>Travel like a local. Confirm your email to activate your account:</p>
-            <a href="{verify_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
-                Verify email
-            </a>
-            <p style="color: #78716c; font-size: 14px;">This link expires in 24 hours. If you didn't create this account, ignore this email.</p>
-            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
-        </div>
-        """
+        "LKK — Verify Your Email",
+        render_email(
+            heading="Verify Your Email",
+            body_html=(
+                f"<p>Hi {first_name(body.name)},</p>"
+                "<p>Welcome to LKK!</p>"
+                "<p>Thanks for signing up. Please verify your email address by clicking the button "
+                "below to activate your account.</p>"
+            ),
+            cta_text="Verify My Email",
+            cta_url=verify_url,
+            footnote_html=(
+                "This verification link will expire in 24 hours.<br/>"
+                "If you did not create an account with LKK, you can safely ignore this email."
+            ),
+            preheader="One click to activate your LKK account.",
+        ),
     )
     return {"ok": True, "message": "Check your email to verify your account before logging in.", "email": email}
 
@@ -701,18 +808,22 @@ async def resend_verification(request: Request, body: ResendVerificationIn):
     verify_url = f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/verify-email?token={verify_token}"
     await send_email(
         email,
-        "Verify your email for LKK 🌿",
-        f"""
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #166534;">Confirm your email</h2>
-            <p>Hi {user['name']},</p>
-            <a href="{verify_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
-                Verify email
-            </a>
-            <p style="color: #78716c; font-size: 14px;">This link expires in 24 hours.</p>
-            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
-        </div>
-        """
+        "LKK — Verify Your Email",
+        render_email(
+            heading="Verify Your Email",
+            body_html=(
+                f"<p>Hi {first_name(user['name'])},</p>"
+                "<p>Here's your verification link again. Please click the button below to verify "
+                "your email and activate your account.</p>"
+            ),
+            cta_text="Verify My Email",
+            cta_url=verify_url,
+            footnote_html=(
+                "This verification link will expire in 24 hours.<br/>"
+                "If you did not request this, you can safely ignore this email."
+            ),
+            preheader="One click to activate your LKK account.",
+        ),
     )
     return {"ok": True, "message": "If that email needs verifying, a new link has been sent."}
 
@@ -771,45 +882,58 @@ async def delete_account(request: Request, body: AccountDeleteIn, user: dict = D
         if not row or not verify_password(body.password, row["password_hash"]):
             raise HTTPException(status_code=401, detail="Incorrect password")
 
-        # Cancel any active bookings tied to this account, on whichever side
-        # they're on. Cancelling (not deleting) preserves the record for the
-        # OTHER party and for accounting — only the person's own identifying
-        # info gets scrubbed below.
-        if user["role"] == "traveller":
-            await conn.execute(
-                "UPDATE bookings SET status='cancelled' WHERE traveller_user_id=$1 AND status = ANY($2::text[])",
-                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
-            )
-        elif user["role"] == "local":
-            await conn.execute(
-                "UPDATE bookings SET status='cancelled' WHERE local_user_id=$1 AND status = ANY($2::text[])",
-                str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
-            )
-
-        # Scrub personal info but keep the row (and its id) intact, since
-        # bookings/messages/reviews reference it and belong to the other party too.
-        anon_email = f"deleted-{user['id']}@deleted.lkk.co.in"
-        await conn.execute(
-            """UPDATE users SET email=$1, name='Deleted user', phone=NULL, city=NULL,
-               password_hash=$2, phone_verified=FALSE WHERE id=$3""",
-            anon_email, hash_password(secrets.token_urlsafe(32)), str(user["id"])
-        )
-
-        # If they were a local, scrub their guide profile + bank details too,
-        # and deactivate their services so they vanish from Browse.
-        if user["role"] == "local":
-            guide = await conn.fetchrow("SELECT id FROM guides WHERE user_id = $1", str(user["id"]))
-            if guide:
+        # Everything below runs as one transaction: either the whole account
+        # gets scrubbed (login *and* guide profile), or none of it does. This
+        # matters because previously the users-row scrub and the guides-row
+        # scrub were two independent statements — if the guide lookup ever
+        # missed, the user's login broke (email/password scrubbed) while
+        # their guide profile stayed fully live in Browse. Wrapping this in
+        # a transaction, and no longer depending on a separate SELECT to find
+        # the guide row, closes that gap.
+        async with conn.transaction():
+            # Cancel any active bookings tied to this account, on whichever
+            # side they're on. Cancelling (not deleting) preserves the record
+            # for the OTHER party and for accounting — only the person's own
+            # identifying info gets scrubbed below.
+            if user["role"] == "traveller":
                 await conn.execute(
-                    """UPDATE guides SET bio=NULL, avatar_url=NULL, video_url=NULL, video_approved=FALSE,
+                    "UPDATE bookings SET status='cancelled' WHERE traveller_user_id=$1 AND status = ANY($2::text[])",
+                    str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+                )
+            elif user["role"] == "local":
+                await conn.execute(
+                    "UPDATE bookings SET status='cancelled' WHERE local_user_id=$1 AND status = ANY($2::text[])",
+                    str(user["id"]), list(ACTIVE_BOOKING_STATUSES)
+                )
+
+            # Scrub personal info but keep the row (and its id) intact, since
+            # bookings/messages/reviews reference it and belong to the other party too.
+            anon_email = f"deleted-{user['id']}@deleted.lkk.co.in"
+            await conn.execute(
+                """UPDATE users SET email=$1, name='Deleted user', phone=NULL, city=NULL,
+                   password_hash=$2, phone_verified=FALSE WHERE id=$3""",
+                anon_email, hash_password(secrets.token_urlsafe(32)), str(user["id"])
+            )
+
+            # If they were a local, scrub their guide profile + bank details too,
+            # and deactivate their services so they vanish from Browse. This is
+            # now unconditional (no "if guide row was found" branch) — it's a
+            # no-op if there's no guide row, and guaranteed to run otherwise.
+            if user["role"] == "local":
+                await conn.execute(
+                    """UPDATE guides SET bio='', avatar_url=NULL, video_url=NULL, video_approved=FALSE,
                        video_rejected=FALSE, video_rejection_reason=NULL, is_complete=FALSE,
                        bank_account_name=NULL, bank_account_number=NULL, bank_ifsc=NULL, upi_vpa=NULL,
-                       bank_verification_status=NULL, bank_verification_reason=NULL, bank_verified_at=NULL,
+                       bank_verification_status='none', bank_verification_reason=NULL, bank_verified_at=NULL,
                        razorpay_contact_id=NULL, razorpay_fund_account_id=NULL
-                       WHERE id=$1""",
-                    guide["id"]
+                       WHERE user_id=$1""",
+                    str(user["id"])
                 )
-                await conn.execute("UPDATE services SET is_active=FALSE WHERE guide_id=$1", guide["id"])
+                await conn.execute(
+                    """UPDATE services SET is_active=FALSE
+                       WHERE guide_id = (SELECT id FROM guides WHERE user_id=$1)""",
+                    str(user["id"])
+                )
 
     return {"ok": True}
 
@@ -936,24 +1060,55 @@ async def admin_review_video(guide_id: str, body: VideoReviewIn, admin: dict = D
                 datetime.now(timezone.utc), (body.reason or "").strip(), str(admin["id"]), str(guide["user_id"])
             )
         traveller_facing_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(guide["user_id"]))
+    frontend_url = os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')
     if traveller_facing_user:
         if body.ban_user:
             await send_email(
                 traveller_facing_user["email"],
-                "Your LKK account has been suspended",
-                f"<h2>Account suspended</h2><p>{(body.reason or '').strip()}</p><p>Contact support if you believe this is a mistake.</p>"
+                "LKK — Account Suspended",
+                render_email(
+                    heading="Account Suspended",
+                    body_html=(
+                        f"<p>Hi {first_name(traveller_facing_user['name'])},</p>"
+                        f"<p>Your LKK account has been suspended. Reason: {(body.reason or '').strip()}</p>"
+                        f"<p>If you believe this is a mistake, please contact us at "
+                        f"<a href=\"mailto:{SUPPORT_EMAIL}\" style=\"color:{_EMAIL_GREEN};\">{SUPPORT_EMAIL}</a>.</p>"
+                    ),
+                    preheader="Your LKK account has been suspended.",
+                ),
             )
         elif body.approved:
             await send_email(
                 traveller_facing_user["email"],
-                "Your intro video is live — LKK 🌿",
-                "<h2>Approved!</h2><p>Your intro video is now visible on your public profile.</p>"
+                "LKK — Your Intro Video is Approved",
+                render_email(
+                    heading="Your Intro Video is Approved",
+                    body_html=(
+                        f"<p>Hi {first_name(traveller_facing_user['name'])},</p>"
+                        "<p>Good news — your intro video has been approved and is now live on your "
+                        "public profile for travellers to see.</p>"
+                    ),
+                    cta_text="View My Dashboard",
+                    cta_url=f"{frontend_url}/local",
+                    preheader="Your intro video is now live on LKK.",
+                ),
             )
         else:
             await send_email(
                 traveller_facing_user["email"],
-                "Your intro video needs a change — LKK 🌿",
-                f"<h2>Not quite ready yet</h2><p>{(body.reason or '').strip()}</p><p>Please upload a new video from your profile page.</p>"
+                "LKK — Your Intro Video Needs a Change",
+                render_email(
+                    heading="Your Intro Video Needs a Change",
+                    body_html=(
+                        f"<p>Hi {first_name(traveller_facing_user['name'])},</p>"
+                        f"<p>Your intro video needs a small change before it can go live: "
+                        f"{(body.reason or '').strip()}</p>"
+                        "<p>Please upload a new version whenever you're ready.</p>"
+                    ),
+                    cta_text="Upload New Video",
+                    cta_url=f"{frontend_url}/local/profile",
+                    preheader="One quick fix needed on your intro video.",
+                ),
             )
     return {"ok": True, "approved": body.approved, "banned": body.ban_user}
 
@@ -1440,7 +1595,17 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
     await send_email(
         user["email"],
         "Booking Confirmed — LKK 🌿",
-        f"<h2>Your booking is confirmed!</h2><p>You've booked '{service['title']}' with {guide['name']} in {guide['city']} for {duration_hours}hrs. Amount: ₹{amount}</p>"
+        render_email(
+            heading="Your booking is confirmed!",
+            body_html=(
+                f"<p>You've booked '{service['title']}' with {guide['name']} in {guide['city']} "
+                f"for {duration_hours} hrs.</p>"
+                f"<p><strong>Amount:</strong> ₹{amount}</p>"
+            ),
+            cta_text="View booking",
+            cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking_id}",
+            preheader=f"Your booking with {guide['name']} is confirmed.",
+        ),
     )
     d = row_to_dict(booking)
     d["id"] = str(d["id"])
@@ -1461,7 +1626,16 @@ async def _mark_booking_paid(conn, booking, razorpay_payment_id: str):
         await send_email(
             traveller["email"],
             "Payment Received — LKK 🌿",
-            f"<h2>Payment confirmed!</h2><p>Amount: ₹{booking['amount']}. Your local will be in touch to confirm the meetup.</p>"
+            render_email(
+                heading="Payment confirmed!",
+                body_html=(
+                    f"<p><strong>Amount:</strong> ₹{booking['amount']}</p>"
+                    "<p>Your local will be in touch to confirm the meetup.</p>"
+                ),
+                cta_text="View booking",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking['id']}",
+                preheader="Your payment has been received.",
+            ),
         )
 
 @api.post("/bookings/{booking_id}/pay/create-order")
@@ -1608,7 +1782,13 @@ async def deliver_itinerary(booking_id: str, body: ItineraryIn, user: dict = Dep
         await send_email(
             traveller["email"],
             "Your Itinerary is Ready — LKK 🌿",
-            f"<h2>Your local sent your itinerary!</h2><p>{body.title}</p><p>Log in to view and confirm it.</p>"
+            render_email(
+                heading="Your local sent your itinerary!",
+                body_html=f"<p><strong>{body.title}</strong></p><p>Log in to view and confirm it.</p>",
+                cta_text="View itinerary",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking_id}",
+                preheader="Your itinerary has arrived.",
+            ),
         )
     return {"ok": True}
 
@@ -1738,7 +1918,14 @@ async def admin_ban_user(user_id: str, body: BanUserIn, admin: dict = Depends(re
         await send_email(
             target_user["email"],
             "Your LKK account has been suspended",
-            f"<h2>Account suspended</h2><p>{body.reason.strip()}</p><p>Contact support if you believe this is a mistake.</p>"
+            render_email(
+                heading="Account suspended",
+                body_html=(
+                    f"<p>{body.reason.strip()}</p>"
+                    "<p>If you believe this is a mistake, reply to this email and our team will take a look.</p>"
+                ),
+                preheader="Your LKK account has been suspended.",
+            ),
         )
     return {"ok": True}
 
@@ -1910,18 +2097,18 @@ async def forgot_password(request: Request, body: ForgotPasswordIn):
     await send_email(
         email,
         "Reset your LKK password 🔑",
-        f"""
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #166534;">Reset your password</h2>
-            <p>Hi {user['name']},</p>
-            <p>We received a request to reset your LKK password. Click the button below to choose a new one:</p>
-            <a href="{reset_url}" style="display: inline-block; background: #166534; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">
-                Reset Password
-            </a>
-            <p style="color: #78716c; font-size: 14px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
-            <p style="color: #78716c; font-size: 14px;">— The LKK Team</p>
-        </div>
-        """
+        render_email(
+            heading="Reset your password",
+            body_html=(
+                f"<p>Hi {user['name']}, we received a request to reset your LKK password. "
+                "Click below to choose a new one.</p>"
+                "<p style=\"color:#78716c;font-size:13.5px;\">This link expires in 1 hour. "
+                "If you didn't request this, you can ignore this email.</p>"
+            ),
+            cta_text="Reset password",
+            cta_url=reset_url,
+            preheader="Reset your LKK password.",
+        ),
     )
     return {"ok": True, "message": "If that email exists, a reset link has been sent."}
 
@@ -1973,7 +2160,13 @@ async def accept_booking(booking_id: str, user: dict = Depends(require_role("loc
         await send_email(
             traveller["email"],
             "Your booking was accepted — LKK 🌿",
-            f"<h2>Great news!</h2><p>{user['name']} accepted your booking. They will send your itinerary soon!</p>"
+            render_email(
+                heading="Great news!",
+                body_html=f"<p>{user['name']} accepted your booking. They'll send your itinerary soon!</p>",
+                cta_text="View booking",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking_id}",
+                preheader=f"{user['name']} accepted your booking.",
+            ),
         )
     return {"ok": True, "status": "accepted"}
 
@@ -1998,7 +2191,16 @@ async def decline_booking(booking_id: str, user: dict = Depends(require_role("lo
         await send_email(
             traveller["email"],
             "Booking update — LKK 🌿",
-            f"<h2>We're sorry!</h2><p>{user['name']} is unavailable for your requested dates. Your refund will be processed shortly.</p>"
+            render_email(
+                heading="We're sorry!",
+                body_html=(
+                    f"<p>{user['name']} is unavailable for your requested dates. "
+                    "Your refund will be processed shortly.</p>"
+                ),
+                cta_text="Browse other locals",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/browse",
+                preheader="An update on your LKK booking.",
+            ),
         )
     return {"ok": True, "status": "cancelled"}
 
