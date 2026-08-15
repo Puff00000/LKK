@@ -345,9 +345,9 @@ def render_email(heading: str, body_html: str, cta_text: str = None, cta_url: st
         <td align="center">
           <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;max-width:480px;width:100%;">
             <tr>
-              <td style="background:{_EMAIL_GREEN};padding:36px 28px;text-align:center;">
+              <td style="background:#ffffff;padding:36px 28px;text-align:center;border-bottom:3px solid {_EMAIL_GREEN};">
                 <img src="{_EMAIL_LOGO_URL}" width="96" height="96" alt="LKK" style="display:block;margin:0 auto;border-radius:20px;border:0;" />
-                <div style="color:rgba(255,255,255,0.75);font-size:13px;margin-top:10px;font-family:{_EMAIL_FONT};">Log kya kahenge</div>
+                <div style="color:{_EMAIL_GREEN};font-size:13px;margin-top:10px;font-family:{_EMAIL_FONT};">Log kya kahenge</div>
               </td>
             </tr>
             <tr>
