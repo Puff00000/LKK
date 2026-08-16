@@ -8,13 +8,16 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 const STATUS = {
-  pending_payment: { text: "Awaiting payment", className: "bg-amber-50 text-amber-800 border-amber-200" },
-  paid:            { text: "Paid · awaiting acceptance", className: "bg-blue-50 text-blue-800 border-blue-200" },
-  accepted:        { text: "Accepted", className: "bg-green-50 text-green-800 border-green-200" },
+  requested:       { text: "Request sent · awaiting response", className: "bg-amber-50 text-amber-800 border-amber-200" },
+  awaiting_payment: { text: "Accepted · pay to confirm", className: "bg-blue-50 text-blue-800 border-blue-200" },
+  accepted:        { text: "Booked", className: "bg-green-50 text-green-800 border-green-200" },
   itinerary_delivered: { text: "Itinerary received", className: "bg-green-50 text-green-900 border-green-300" },
   completed:       { text: "Completed", className: "bg-stone-100 text-stone-700 border-stone-200" },
   cancelled:       { text: "Cancelled", className: "bg-red-50 text-red-700 border-red-200" },
   disputed:        { text: "In dispute", className: "bg-red-50 text-red-800 border-red-200" },
+  declined:        { text: "Declined", className: "bg-stone-100 text-stone-500 border-stone-200" },
+  expired:         { text: "Expired", className: "bg-stone-100 text-stone-500 border-stone-200" },
+  unavailable:     { text: "No longer available", className: "bg-stone-100 text-stone-500 border-stone-200" },
 };
 
 function DraftTripCard({ trip, onDeleted }) {
@@ -111,7 +114,7 @@ function TripCard({ trip }) {
       </div>
       <ul className="mt-4 divide-y divide-stone-100 border-t border-stone-100">
         {trip.bookings.map((b) => {
-          const meta = STATUS[b.status] || STATUS.pending_payment;
+          const meta = STATUS[b.status] || STATUS.requested;
           return (
             <li key={b.id}>
               <Link to={`/bookings/${b.id}`} className="flex items-center justify-between gap-3 py-3 hover:text-green-800">
@@ -152,8 +155,9 @@ export default function TravellerDashboard() {
     [...trips.draft, ...trips.upcoming, ...trips.past].flatMap((t) => t.bookings.map((b) => b.id))
   );
   const unlinkedBookings = bookings.filter((b) => !linkedBookingIds.has(b.id));
-  const upcoming = unlinkedBookings.filter((b) => !["completed", "cancelled"].includes(b.status));
-  const past = unlinkedBookings.filter((b) => ["completed", "cancelled"].includes(b.status));
+  const TERMINAL_STATUSES = ["completed", "cancelled", "declined", "expired", "unavailable"];
+  const upcoming = unlinkedBookings.filter((b) => !TERMINAL_STATUSES.includes(b.status));
+  const past = unlinkedBookings.filter((b) => TERMINAL_STATUSES.includes(b.status));
 
   return (
     <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-10" data-testid="traveller-dashboard">
@@ -222,7 +226,7 @@ export default function TravellerDashboard() {
               <h2 className="font-heading text-xl font-bold text-stone-900">Other upcoming bookings</h2>
               <ul className="mt-4 space-y-4">
                 {upcoming.map((b) => {
-                  const meta = STATUS[b.status] || STATUS.pending_payment;
+                  const meta = STATUS[b.status] || STATUS.requested;
                   return (
                     <li key={b.id}>
                       <Link
@@ -248,7 +252,6 @@ export default function TravellerDashboard() {
                           </div>
                           <div className="text-right">
                             <div className="font-heading text-xl font-bold text-stone-900">{inr(b.amount)}</div>
-                            <div className="text-xs text-stone-400 mt-0.5">MOCK PAYMENT</div>
                           </div>
                         </div>
                         {b.status === "itinerary_delivered" && (
