@@ -3,7 +3,8 @@ import { api, inr } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock, Ban, ShieldOff, Landmark, Undo2 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clock, Ban, ShieldOff, Landmark, Undo2, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_COLORS = {
@@ -41,6 +42,9 @@ export default function AdminPanel() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [acting, setActing] = useState(null);
+  const [chatBooking, setChatBooking] = useState(null); // booking object, or null when closed
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatLoading, setChatLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -172,6 +176,20 @@ export default function AdminPanel() {
     }
   };
 
+  const openChat = async (booking) => {
+    setChatBooking(booking);
+    setChatLoading(true);
+    try {
+      const { data } = await api.get(`/bookings/${booking.id}/messages`);
+      setChatMessages(data);
+    } catch (e) {
+      toast.error("Failed to load chat");
+      setChatBooking(null);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   const filteredPayouts = payouts.filter((p) =>
     payoutFilter === "all" ? true : payoutFilter === "pending" ? !p.payout_paid_out : p.payout_paid_out
   );
@@ -277,6 +295,14 @@ export default function AdminPanel() {
                       className="border-red-300 text-red-700 hover:bg-red-50 h-9 text-xs"
                     >
                       Refund traveller
+                    </Button>
+                    <Button
+                      onClick={() => openChat(b)}
+                      variant="outline"
+                      data-testid={`view-chat-dispute-${b.id}`}
+                      className="border-stone-300 h-9 text-xs"
+                    >
+                      <MessageCircle className="mr-1.5 h-3.5 w-3.5" /> View chat
                     </Button>
                   </div>
                 </div>
@@ -579,7 +605,7 @@ export default function AdminPanel() {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 border-b border-stone-200">
                 <tr>
-                  {["Booking", "Traveller", "Local", "Service", "Meetup", "Amount", "Fee", "Status"].map((h) => (
+                  {["Booking", "Traveller", "Local", "Service", "Meetup", "Amount", "Fee", "Status", "Chat"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-stone-500 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -606,6 +632,17 @@ export default function AdminPanel() {
                       <Badge variant="outline" className={STATUS_COLORS[b.status] || ""}>
                         {b.status.replace(/_/g, " ")}
                       </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openChat(b)}
+                        data-testid={`view-chat-${b.id}`}
+                        className="border-stone-300 h-8 text-xs"
+                      >
+                        <MessageCircle className="mr-1.5 h-3.5 w-3.5" /> View
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -706,6 +743,43 @@ export default function AdminPanel() {
           </div>
         )}
       </div>
+
+      {/* Chat viewer — read-only, for support/dispute review. Admin access
+          to this is already enforced server-side (the messages endpoint
+          allows the admin role regardless of booking status), this just
+          gives it somewhere to actually be viewed from. */}
+      <Dialog open={!!chatBooking} onOpenChange={(open) => !open && setChatBooking(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {chatBooking ? `${chatBooking.traveller_name} ↔ ${chatBooking.guide_name}` : "Chat"}
+            </DialogTitle>
+          </DialogHeader>
+          {chatBooking && (
+            <div className="text-xs text-stone-500 -mt-2">
+              {chatBooking.service_title} · {chatBooking.booking_date} · {chatBooking.status.replace(/_/g, " ")}
+            </div>
+          )}
+          <div className="max-h-[60vh] overflow-y-auto space-y-3 py-2" data-testid="admin-chat-messages">
+            {chatLoading ? (
+              <div className="text-sm text-stone-400 text-center py-8">Loading…</div>
+            ) : chatMessages.length === 0 ? (
+              <div className="text-sm text-stone-400 text-center py-8">No messages in this booking yet.</div>
+            ) : (
+              chatMessages.map((m) => (
+                <div key={m.id} className="rounded-xl bg-stone-50 border border-stone-100 px-3.5 py-2 text-sm">
+                  <div className="flex items-center gap-2 text-[11px] text-stone-500 mb-0.5">
+                    <span className="font-medium">{m.sender_name}</span>
+                    <Badge variant="outline" className={ROLE_COLORS[m.sender_role] || ""}>{m.sender_role}</Badge>
+                    <span>{new Date(m.created_at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+                  </div>
+                  <div className="text-stone-800 whitespace-pre-line">{m.content}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
