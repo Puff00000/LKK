@@ -152,6 +152,29 @@ def row_to_dict(row) -> dict:
 def rows_to_list(rows) -> list:
     return [dict(row) for row in rows]
 
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+# Matches runs of digits with optional spaces/dashes/dots/parens as separators
+# BETWEEN digits (so it still catches "98765 43210" or "+91-98765-43210"),
+# then checks the digit count alone is >= 9. 9 is deliberately above the 8
+# digits an ISO date like "2026-08-31" strips down to, so normal chat about
+# meetup dates doesn't get wrongly blocked, while any real Indian mobile
+# number (10 digits, or 12 with the 91 country code) still gets caught.
+_DIGIT_RUN_RE = re.compile(r"\d(?:[\d\-.\s()]{0,20}\d){0,20}")
+
+def contains_contact_info(text: str) -> bool:
+    """True if the text looks like it's trying to share a phone number or
+    email address. Used to keep all coordination inside LKK's chat rather
+    than travellers/locals routing around the platform once they're talking."""
+    if not text:
+        return False
+    if _EMAIL_RE.search(text):
+        return True
+    for match in _DIGIT_RUN_RE.finditer(text):
+        digits_only = re.sub(r"\D", "", match.group())
+        if len(digits_only) >= 9:
+            return True
+    return False
+
 # --- Supabase Storage ------------------------------------------------------
 async def upload_to_supabase(path: str, data: bytes, content_type: str, bucket: str = "avatars") -> str:
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -1876,6 +1899,14 @@ async def my_bookings(user: dict = Depends(get_current_user)):
     for row in rows:
         d = row_to_dict(row)
         d["id"] = str(d["id"])
+        # A local never sees the traveller's phone number, at any status —
+        # not while it's a bare request, not after payment, not even once
+        # the meetup is confirmed. All coordination happens through in-app
+        # chat instead. This has to be stripped here, not just hidden in the
+        # UI, since the raw field would otherwise still sit in the API
+        # response for anyone to read off the network tab.
+        if user["role"] == "local":
+            d.pop("traveller_phone", None)
         result.append(d)
     return result
 
@@ -1892,6 +1923,8 @@ async def get_booking(booking_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not your booking")
     d = row_to_dict(booking)
     d["id"] = str(d["id"])
+    if str(user["id"]) == str(booking["local_user_id"]) and user["role"] != "admin":
+        d.pop("traveller_phone", None)
     return d
 
 @api.post("/bookings/{booking_id}/itinerary")
@@ -1978,6 +2011,11 @@ async def post_message(booking_id: str, body: MessageIn, user: dict = Depends(ge
             str(booking["traveller_user_id"]), str(booking["local_user_id"])
         ):
             raise HTTPException(status_code=403, detail="Not your booking")
+        if contains_contact_info(body.content):
+            raise HTTPException(
+                status_code=400,
+                detail="For your safety, phone numbers and email addresses can't be sent in chat. Keep coordination here in LKK — it's monitored and protects both of you."
+            )
         msg_id = str(uuid.uuid4())
         await conn.execute(
             """INSERT INTO messages (id, booking_id, sender_id, sender_name, sender_role, content, created_at)
