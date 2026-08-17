@@ -874,7 +874,7 @@ async def login(request: Request, body: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     return {"user": public_user(user)}
 
-ACTIVE_BOOKING_STATUSES = ("pending_payment", "paid", "accepted", "itinerary_delivered")
+ACTIVE_BOOKING_STATUSES = ("requested", "awaiting_payment", "accepted", "itinerary_delivered")
 
 class AccountDeleteIn(BaseModel):
     password: str
@@ -1471,13 +1471,14 @@ async def update_service(service_id: str, body: ServiceIn, user: dict = Depends(
 @api.delete("/services/{service_id}")
 async def delete_service(service_id: str, user: dict = Depends(require_role("local"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
         existing = await conn.fetchrow("SELECT * FROM services WHERE id = $1", service_id)
         if not guide or not existing or str(existing["guide_id"]) != str(guide["id"]):
             raise HTTPException(status_code=404, detail="Service not found")
         active_booking = await conn.fetchval(
             """SELECT COUNT(*) FROM bookings WHERE service_id = $1
-               AND status NOT IN ('completed', 'cancelled', 'disputed')""",
+               AND status NOT IN ('completed', 'cancelled', 'disputed', 'declined', 'expired', 'unavailable')""",
             service_id
         )
         if active_booking:
@@ -1516,6 +1517,7 @@ async def create_trip(body: TripIn, user: dict = Depends(require_role("traveller
 @api.get("/trips/mine")
 async def my_trips(user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         trips = await conn.fetch(
             "SELECT * FROM trips WHERE traveller_user_id = $1 ORDER BY start_date DESC",
             str(user["id"])
@@ -1532,7 +1534,7 @@ async def my_trips(user: dict = Depends(require_role("traveller"))):
     # A trip only "counts" as a real upcoming/past trip once at least one booking
     # under it has actually been paid for. Otherwise — even if it's sitting in the
     # database tied to the traveller's account — it's still just a draft.
-    CONFIRMED_STATUSES = {"paid", "accepted", "itinerary_delivered", "completed", "disputed"}
+    CONFIRMED_STATUSES = {"awaiting_payment", "accepted", "itinerary_delivered", "completed", "disputed"}
     today = datetime.now(timezone.utc).date()
     draft, upcoming, past = [], [], []
     for t in trips:
@@ -1551,6 +1553,7 @@ async def my_trips(user: dict = Depends(require_role("traveller"))):
 @api.delete("/trips/{trip_id}")
 async def delete_trip(trip_id: str, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         trip = await conn.fetchrow(
             "SELECT * FROM trips WHERE id = $1 AND traveller_user_id = $2",
             trip_id, str(user["id"])
@@ -1559,7 +1562,7 @@ async def delete_trip(trip_id: str, user: dict = Depends(require_role("traveller
             raise HTTPException(status_code=404, detail="Trip not found")
         confirmed = await conn.fetchval(
             """SELECT COUNT(*) FROM bookings WHERE trip_id = $1
-               AND status IN ('paid','accepted','itinerary_delivered','completed','disputed')""",
+               AND status IN ('awaiting_payment','accepted','itinerary_delivered','completed','disputed')""",
             trip_id
         )
         if confirmed:
@@ -1569,6 +1572,71 @@ async def delete_trip(trip_id: str, user: dict = Depends(require_role("traveller
     return {"ok": True}
 
 # --- Bookings --------------------------------------------------------------
+# Request-first flow: requested -> (accept) -> awaiting_payment -> (pay) -> accepted
+#                            \-> declined / expired          \-> expired
+# A request can also be auto-resolved to 'unavailable' if another,
+# overlapping request for the same guide gets accepted first.
+REQUEST_RESPONSE_WINDOW_HOURS = 24  # time a local has to accept/decline a request
+PAYMENT_WINDOW_HOURS = 24  # time a traveller has to pay once accepted
+# Statuses that mean "this guide has actually committed to this slot" --
+# a bare 'requested' from someone else doesn't reserve anything, since
+# nothing's confirmed yet. Used by the overlap check below.
+COMMITTED_BOOKING_STATUSES = ("awaiting_payment", "accepted", "itinerary_delivered")
+
+def parse_time_slot(raw: str) -> "time":
+    """'9:00 AM' -> time(9, 0). Assumes the fixed on-the-hour format
+    BookingFlow.jsx's TIME_SLOTS always produces -- not a general parser."""
+    return datetime.strptime(raw.strip(), "%I:%M %p").time()
+
+def booking_window(booking_time: str, duration_hours: int) -> tuple:
+    start = parse_time_slot(booking_time)
+    start_minutes = start.hour * 60 + start.minute
+    end_minutes = start_minutes + duration_hours * 60
+    # Services are capped at 8h and never start later than 8 PM, so this
+    # never actually needs to roll into the next day -- just clamp defensively.
+    end_minutes = min(end_minutes, 23 * 60 + 59)
+    from datetime import time as _time
+    return start, _time(end_minutes // 60, end_minutes % 60)
+
+def windows_overlap(a_start, a_end, b_start, b_end) -> bool:
+    return a_start < b_end and b_start < a_end
+
+async def has_conflicting_booking(conn, guide_id: str, booking_date, booking_time: str,
+                                    duration_hours: int, exclude_booking_id: str = None) -> bool:
+    """True if this guide already has a COMMITTED booking (awaiting_payment or
+    later) whose time window overlaps this one. A different traveller's bare
+    'requested' ask for the same slot does not block a new request or count
+    as a conflict -- only something the local has actually said yes to does."""
+    rows = await conn.fetch(
+        """SELECT booking_time, duration_hours FROM bookings
+           WHERE guide_id = $1 AND booking_date = $2
+             AND status = ANY($3::text[])
+             AND ($4::uuid IS NULL OR id != $4::uuid)""",
+        guide_id, booking_date, list(COMMITTED_BOOKING_STATUSES), exclude_booking_id,
+    )
+    new_start, new_end = booking_window(booking_time, duration_hours)
+    for row in rows:
+        existing_start, existing_end = booking_window(row["booking_time"], row["duration_hours"])
+        if windows_overlap(new_start, new_end, existing_start, existing_end):
+            return True
+    return False
+
+async def _sweep_expired(conn) -> None:
+    """Lazy expiry: there's no scheduler/cron in this app, so instead a
+    booking only actually flips to 'expired' the next time anyone reads
+    booking data. Called at the top of every endpoint that returns bookings.
+    Cheap blanket UPDATEs, no per-row Python datetime math."""
+    await conn.execute(
+        """UPDATE bookings SET status='expired'
+           WHERE status='requested' AND created_at < NOW() - make_interval(hours => $1)""",
+        REQUEST_RESPONSE_WINDOW_HOURS
+    )
+    await conn.execute(
+        """UPDATE bookings SET status='expired'
+           WHERE status='awaiting_payment' AND accepted_at < NOW() - make_interval(hours => $1)""",
+        PAYMENT_WINDOW_HOURS
+    )
+
 @api.post("/bookings")
 async def create_booking(body: BookingIn, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
@@ -1603,6 +1671,17 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
                 parse_date(body.trip_end_date, "trip_end_date"),
                 datetime.now(timezone.utc)
             )
+        booking_date = parse_date(body.booking_date, "booking_date")
+        # Soft check, purely for a fast/friendly error -- this does NOT block
+        # on other travellers' bare 'requested' asks for the same slot, only
+        # on slots the guide has actually committed to. The authoritative
+        # check happens again at accept time, since two people can request
+        # the same open slot before either gets a response.
+        if await has_conflicting_booking(conn, str(guide["id"]), booking_date, body.booking_time, duration_hours):
+            raise HTTPException(
+                status_code=400,
+                detail="This local is already booked for an overlapping time on that date. Try a different time or date."
+            )
         booking_id = str(uuid.uuid4())
         await conn.execute(
             """INSERT INTO bookings (id, guide_id, guide_name, guide_city, local_user_id,
@@ -1613,27 +1692,46 @@ async def create_booking(body: BookingIn, user: dict = Depends(require_role("tra
             booking_id, str(guide["id"]), guide["name"], guide["city"], str(guide["user_id"]),
             str(user["id"]), user["name"], body.traveller_phone,
             str(service["id"]), service["title"],
-            parse_date(body.booking_date, "booking_date"), body.booking_time, duration_hours, body.notes or "",
+            booking_date, body.booking_time, duration_hours, body.notes or "",
             amount, platform_fee, local_payout,
-            "pending_payment", datetime.now(timezone.utc), trip_id
+            "requested", datetime.now(timezone.utc), trip_id
         )
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
-    # Send confirmation email
+        local_user = await conn.fetchrow("SELECT email, name FROM users WHERE id = $1", str(guide["user_id"]))
+    # No money has moved yet -- this just tells the traveller their request
+    # went out, and lets the local know something's waiting on them.
     await send_email(
         user["email"],
-        "Booking Confirmed — LKK 🌿",
+        "Request Sent — LKK 🌿",
         render_email(
-            heading="Your booking is confirmed!",
+            heading="Your request is on its way!",
             body_html=(
-                f"<p>You've booked '{service['title']}' with {guide['name']} in {guide['city']} "
+                f"<p>You've requested '{service['title']}' with {guide['name']} in {guide['city']} "
                 f"for {duration_hours} hrs.</p>"
-                f"<p><strong>Amount:</strong> ₹{amount}</p>"
+                f"<p>{guide['name']} has {REQUEST_RESPONSE_WINDOW_HOURS} hours to respond. "
+                f"You'll only be asked to pay once they accept.</p>"
             ),
-            cta_text="View booking",
+            cta_text="View request",
             cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking_id}",
-            preheader=f"Your booking with {guide['name']} is confirmed.",
+            preheader=f"Your request with {guide['name']} is on its way.",
         ),
     )
+    if local_user:
+        await send_email(
+            local_user["email"],
+            "New Booking Request — LKK 🌿",
+            render_email(
+                heading="You've got a new request!",
+                body_html=(
+                    f"<p>{user['name']} would like to book '{service['title']}' "
+                    f"on {booking_date} at {body.booking_time}, {duration_hours} hrs.</p>"
+                    f"<p>Respond within {REQUEST_RESPONSE_WINDOW_HOURS} hours or the request expires.</p>"
+                ),
+                cta_text="View request",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/local",
+                preheader=f"{user['name']} sent you a new booking request.",
+            ),
+        )
     d = row_to_dict(booking)
     d["id"] = str(d["id"])
     return d
@@ -1644,8 +1742,11 @@ class RazorpayVerifyIn(BaseModel):
     razorpay_signature: str
 
 async def _mark_booking_paid(conn, booking, razorpay_payment_id: str):
+    # 'accepted' now means exactly what it always meant here -- paid AND
+    # accepted. Payment is just the second half of that; the local already
+    # said yes back when this booking moved into awaiting_payment.
     await conn.execute(
-        "UPDATE bookings SET status='paid', payment_id=$1, razorpay_payment_id=$1, paid_at=$2 WHERE id=$3",
+        "UPDATE bookings SET status='accepted', payment_id=$1, razorpay_payment_id=$1, paid_at=$2 WHERE id=$3",
         razorpay_payment_id, datetime.now(timezone.utc), str(booking["id"])
     )
     traveller = await conn.fetchrow("SELECT email FROM users WHERE id = $1", str(booking["traveller_user_id"]))
@@ -1654,24 +1755,25 @@ async def _mark_booking_paid(conn, booking, razorpay_payment_id: str):
             traveller["email"],
             "Payment Received — LKK 🌿",
             render_email(
-                heading="Payment confirmed!",
+                heading="You're booked!",
                 body_html=(
                     f"<p><strong>Amount:</strong> ₹{booking['amount']}</p>"
-                    "<p>Your local will be in touch to confirm the meetup.</p>"
+                    "<p>Payment confirmed and your local's already on board. Use chat to sort out meetup details.</p>"
                 ),
                 cta_text="View booking",
                 cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking['id']}",
-                preheader="Your payment has been received.",
+                preheader="Your payment has been received — you're booked.",
             ),
         )
 
 @api.post("/bookings/{booking_id}/pay/create-order")
 async def create_razorpay_order(booking_id: str, user: dict = Depends(require_role("traveller"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] != "pending_payment":
+        if booking["status"] != "awaiting_payment":
             raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
         order = await razorpay_create_order(
             amount_rupees=booking["amount"],
@@ -1699,16 +1801,16 @@ async def verify_razorpay_payment(booking_id: str, body: RazorpayVerifyIn, user:
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["traveller_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] == "paid":
-            return {"ok": True, "status": "paid"}  # already confirmed, likely via webhook
-        if booking["status"] != "pending_payment":
+        if booking["status"] == "accepted":
+            return {"ok": True, "status": "accepted"}  # already confirmed, likely via webhook
+        if booking["status"] != "awaiting_payment":
             raise HTTPException(status_code=400, detail="Booking is not awaiting payment")
         if str(booking["razorpay_order_id"]) != body.razorpay_order_id:
             raise HTTPException(status_code=400, detail="Order mismatch")
         if not razorpay_verify_payment_signature(body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature):
             raise HTTPException(status_code=400, detail="Payment verification failed")
         await _mark_booking_paid(conn, booking, body.razorpay_payment_id)
-    return {"ok": True, "status": "paid"}
+    return {"ok": True, "status": "accepted"}
 
 @api.post("/webhooks/razorpay")
 async def razorpay_webhook(request: Request):
@@ -1728,7 +1830,7 @@ async def razorpay_webhook(request: Request):
         payment_id = payment_entity.get("id")
         async with db_pool.acquire() as conn:
             booking = await conn.fetchrow("SELECT * FROM bookings WHERE razorpay_order_id = $1", order_id)
-            if booking and booking["status"] == "pending_payment":
+            if booking and booking["status"] == "awaiting_payment":
                 await _mark_booking_paid(conn, booking, payment_id)
     elif event in ("fund_account.validation.completed", "fund_account.validation.failed"):
         validation_entity = payload["payload"]["fund_account.validation"]["entity"]
@@ -1757,6 +1859,7 @@ async def razorpay_webhook(request: Request):
 @api.get("/bookings/mine")
 async def my_bookings(user: dict = Depends(get_current_user)):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         if user["role"] == "admin":
             rows = await conn.fetch("SELECT * FROM bookings ORDER BY created_at DESC LIMIT 500")
         elif user["role"] == "traveller":
@@ -1779,6 +1882,7 @@ async def my_bookings(user: dict = Depends(get_current_user)):
 @api.get("/bookings/{booking_id}")
 async def get_booking(booking_id: str, user: dict = Depends(get_current_user)):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
@@ -2170,44 +2274,101 @@ async def reset_password(request: Request, body: ResetPasswordIn):
 @api.post("/bookings/{booking_id}/accept")
 async def accept_booking(booking_id: str, user: dict = Depends(require_role("local"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["local_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] != "paid":
-            raise HTTPException(status_code=400, detail="Only paid bookings can be accepted")
+        if booking["status"] != "requested":
+            raise HTTPException(status_code=400, detail="This request is no longer awaiting a response")
+        # Authoritative check — two travellers can both have a bare 'requested'
+        # ask for an overlapping slot; whichever gets accepted first wins.
+        # The soft check at request time can't catch this, since neither was
+        # committed yet when both were created.
+        if await has_conflicting_booking(
+            conn, str(booking["guide_id"]), booking["booking_date"], booking["booking_time"],
+            booking["duration_hours"], exclude_booking_id=booking_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="You've already accepted another request that overlaps this time — decline or reschedule that one first."
+            )
         await conn.execute(
-            "UPDATE bookings SET status='accepted' WHERE id=$1",
-            booking_id
+            "UPDATE bookings SET status='awaiting_payment', accepted_at=$1 WHERE id=$2",
+            datetime.now(timezone.utc), booking_id
         )
         traveller = await conn.fetchrow(
             "SELECT email, name FROM users WHERE id = $1",
             str(booking["traveller_user_id"])
         )
+        # Every OTHER still-'requested' booking for this guide that overlaps
+        # the slot just taken is no longer viable — auto-resolve it instead
+        # of leaving it to sit there looking pending until it expires on its
+        # own. No money was ever at risk for any of them.
+        other_requests = await conn.fetch(
+            """SELECT * FROM bookings WHERE guide_id = $1 AND booking_date = $2
+               AND status = 'requested' AND id != $3""",
+            str(booking["guide_id"]), booking["booking_date"], booking_id
+        )
+        new_start, new_end = booking_window(booking["booking_time"], booking["duration_hours"])
+        auto_resolved = []
+        for other in other_requests:
+            other_start, other_end = booking_window(other["booking_time"], other["duration_hours"])
+            if windows_overlap(new_start, new_end, other_start, other_end):
+                await conn.execute("UPDATE bookings SET status='unavailable' WHERE id=$1", str(other["id"]))
+                other_traveller = await conn.fetchrow(
+                    "SELECT email, name FROM users WHERE id = $1", str(other["traveller_user_id"])
+                )
+                if other_traveller:
+                    auto_resolved.append((other, other_traveller))
     if traveller:
         await send_email(
             traveller["email"],
-            "Your booking was accepted — LKK 🌿",
+            "Your request was accepted — LKK 🌿",
             render_email(
                 heading="Great news!",
-                body_html=f"<p>{user['name']} accepted your booking. They'll send your itinerary soon!</p>",
-                cta_text="View booking",
+                body_html=(
+                    f"<p>{user['name']} accepted your request. Pay now to lock in your spot — "
+                    f"you have {PAYMENT_WINDOW_HOURS} hours before it releases back to them.</p>"
+                ),
+                cta_text="Pay now",
                 cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/bookings/{booking_id}",
-                preheader=f"{user['name']} accepted your booking.",
+                preheader=f"{user['name']} accepted your request — pay to confirm.",
             ),
         )
-    return {"ok": True, "status": "accepted"}
+    for other, other_traveller in auto_resolved:
+        await send_email(
+            other_traveller["email"],
+            "That slot's no longer available — LKK 🌿",
+            render_email(
+                heading="This one got away",
+                body_html=(
+                    f"<p>Someone else was accepted for {other['service_title']} on "
+                    f"{other['booking_date']} at {other['booking_time']} before your request was answered. "
+                    "Nothing was charged — feel free to try another time or another local.</p>"
+                ),
+                cta_text="Browse other locals",
+                cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/browse",
+                preheader="That time slot was taken by another traveller.",
+            ),
+        )
+    return {"ok": True, "status": "awaiting_payment"}
 
 
 @api.post("/bookings/{booking_id}/decline")
 async def decline_booking(booking_id: str, user: dict = Depends(require_role("local"))):
     async with db_pool.acquire() as conn:
+        await _sweep_expired(conn)
         booking = await conn.fetchrow("SELECT * FROM bookings WHERE id = $1", booking_id)
         if not booking or str(booking["local_user_id"]) != str(user["id"]):
             raise HTTPException(status_code=404, detail="Booking not found")
-        if booking["status"] not in ("paid", "accepted"):
-            raise HTTPException(status_code=400, detail="This booking cannot be declined")
+        # Only a bare request can be declined now — nothing's been paid yet
+        # at this point, so there's no 'accepted' branch here anymore (that
+        # used to also allow declining after payment, which doesn't make
+        # sense any more now that payment only happens after acceptance).
+        if booking["status"] != "requested":
+            raise HTTPException(status_code=400, detail="This request is no longer awaiting a response")
         await conn.execute(
-            "UPDATE bookings SET status='cancelled' WHERE id=$1",
+            "UPDATE bookings SET status='declined' WHERE id=$1",
             booking_id
         )
         traveller = await conn.fetchrow(
@@ -2217,19 +2378,19 @@ async def decline_booking(booking_id: str, user: dict = Depends(require_role("lo
     if traveller:
         await send_email(
             traveller["email"],
-            "Booking update — LKK 🌿",
+            "Request update — LKK 🌿",
             render_email(
                 heading="We're sorry!",
                 body_html=(
-                    f"<p>{user['name']} is unavailable for your requested dates. "
-                    "Your refund will be processed shortly.</p>"
+                    f"<p>{user['name']} isn't able to take this one. Nothing was ever charged — "
+                    "feel free to try another time or another local.</p>"
                 ),
                 cta_text="Browse other locals",
                 cta_url=f"{os.environ.get('FRONTEND_URL', 'https://www.lkk.co.in')}/browse",
-                preheader="An update on your LKK booking.",
+                preheader="An update on your LKK request.",
             ),
         )
-    return {"ok": True, "status": "cancelled"}
+    return {"ok": True, "status": "declined"}
 
 
 # --- Health ----------------------------------------------------------------
