@@ -7,13 +7,16 @@ import { ShieldCheck, ShieldAlert, Search, RefreshCw, CheckCircle2, XCircle, Clo
 import { toast } from "sonner";
 
 const STATUS_COLORS = {
-  pending_payment: "bg-amber-50 text-amber-800 border-amber-200",
-  paid:            "bg-blue-50 text-blue-800 border-blue-200",
+  requested:       "bg-amber-50 text-amber-900 border-amber-300",
+  awaiting_payment: "bg-blue-50 text-blue-800 border-blue-200",
   accepted:        "bg-green-50 text-green-800 border-green-200",
   itinerary_delivered: "bg-blue-50 text-blue-900 border-blue-300",
   completed:       "bg-stone-100 text-stone-700 border-stone-200",
   cancelled:       "bg-red-50 text-red-700 border-red-200",
   disputed:        "bg-red-50 text-red-800 border-red-200",
+  declined:        "bg-stone-100 text-stone-500 border-stone-200",
+  expired:         "bg-stone-100 text-stone-500 border-stone-200",
+  unavailable:     "bg-stone-100 text-stone-500 border-stone-200",
 };
 
 const ROLE_COLORS = {
@@ -225,9 +228,10 @@ export default function AdminPanel() {
 
       {/* Booking status summary */}
       {stats && (
-        <div className="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-5">
+        <div className="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
           {[
-            { label: "Paid", value: bookings.filter(b => b.status === "paid").length },
+            { label: "Requested", value: bookings.filter(b => b.status === "requested").length },
+            { label: "Awaiting payment", value: bookings.filter(b => b.status === "awaiting_payment").length },
             { label: "Accepted", value: bookings.filter(b => b.status === "accepted").length },
             { label: "Completed", value: stats.completed_bookings },
             { label: "Cancelled", value: bookings.filter(b => b.status === "cancelled").length },
@@ -553,13 +557,16 @@ export default function AdminPanel() {
             className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700"
           >
             <option value="all">All statuses</option>
-            <option value="pending_payment">Pending payment</option>
-            <option value="paid">Paid</option>
+            <option value="requested">Requested</option>
+            <option value="awaiting_payment">Awaiting payment</option>
             <option value="accepted">Accepted</option>
             <option value="itinerary_delivered">Itinerary delivered</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
             <option value="disputed">Disputed</option>
+            <option value="declined">Declined</option>
+            <option value="expired">Expired</option>
+            <option value="unavailable">Unavailable</option>
           </select>
         </div>
 
