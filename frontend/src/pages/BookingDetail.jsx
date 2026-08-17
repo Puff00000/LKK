@@ -12,13 +12,29 @@ import { toast } from "sonner";
 import { openRazorpayCheckout } from "@/lib/razorpay";
 
 const STATUS_LABEL = {
-  pending_payment: "Awaiting payment",
-  paid: "Paid · awaiting local's acceptance",
+  requested: "Requested · awaiting response",
+  awaiting_payment: "Accepted · awaiting payment",
   accepted: "Accepted · meetup confirmed",
   itinerary_delivered: "Accepted · meetup confirmed",
   completed: "Completed",
   cancelled: "Cancelled",
   disputed: "In dispute",
+  declined: "Declined",
+  expired: "Expired",
+  unavailable: "No longer available",
+};
+
+const STATUS_BADGE_COLOR = {
+  requested: "bg-amber-50 text-amber-900 border-amber-300",
+  awaiting_payment: "bg-blue-50 text-blue-800 border-blue-200",
+  accepted: "bg-green-50 text-green-900 border-green-200",
+  itinerary_delivered: "bg-green-50 text-green-900 border-green-200",
+  completed: "bg-stone-100 text-stone-700 border-stone-200",
+  cancelled: "bg-red-50 text-red-700 border-red-200",
+  disputed: "bg-red-50 text-red-800 border-red-200",
+  declined: "bg-stone-100 text-stone-500 border-stone-200",
+  expired: "bg-stone-100 text-stone-500 border-stone-200",
+  unavailable: "bg-stone-100 text-stone-500 border-stone-200",
 };
 
 export default function BookingDetail() {
@@ -34,6 +50,7 @@ export default function BookingDetail() {
   const [disputeReason, setDisputeReason] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [responding, setResponding] = useState(false);
   const messagesEndRef = useRef(null);
 
   const loadAll = async () => {
@@ -114,6 +131,32 @@ export default function BookingDetail() {
     }
   };
 
+  const handleAccept = async () => {
+    setResponding(true);
+    try {
+      await api.post(`/bookings/${id}/accept`);
+      toast.success("Accepted! The traveller's been notified to pay.");
+      loadAll();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setResponding(false);
+    }
+  };
+
+  const handleDecline = async () => {
+    setResponding(true);
+    try {
+      await api.post(`/bookings/${id}/decline`);
+      toast.success("Declined.");
+      loadAll();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || e.message);
+    } finally {
+      setResponding(false);
+    }
+  };
+
   const submitReview = async () => {
     try {
       await api.post(`/bookings/${id}/review`, { rating: reviewRating, comment: reviewComment });
@@ -149,7 +192,7 @@ export default function BookingDetail() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Badge variant="outline" data-testid="booking-status" className="bg-green-50 text-green-900 border-green-200">
+          <Badge variant="outline" data-testid="booking-status" className={STATUS_BADGE_COLOR[booking.status] || "bg-stone-100 text-stone-700 border-stone-200"}>
             {STATUS_LABEL[booking.status]}
           </Badge>
           <div className="text-right">
@@ -165,12 +208,44 @@ export default function BookingDetail() {
           <section className="rounded-2xl border border-stone-200 bg-white p-6" data-testid="meetup-section">
             <h2 className="font-heading text-xl font-bold text-stone-900">Your experience</h2>
 
-            {booking.status === "pending_payment" && (
+            {booking.status === "requested" && (
+              <div className="mt-4">
+                <p className="text-stone-500">
+                  {isLocal
+                    ? "New request — nothing's been charged yet. Accept to let the traveller pay, or decline if you can't make it."
+                    : "Your request has been sent. Nothing's charged yet — you'll only pay once they accept."}
+                </p>
+                {isLocal && (
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <Button
+                      onClick={handleAccept}
+                      disabled={responding}
+                      data-testid="accept-request-btn"
+                      className="bg-green-800 text-white hover:bg-green-900 hover:text-white"
+                    >
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {responding ? "Accepting…" : "Accept"}
+                    </Button>
+                    <Button
+                      onClick={handleDecline}
+                      disabled={responding}
+                      variant="outline"
+                      data-testid="decline-request-btn"
+                      className="border-red-200 text-red-700 hover:bg-red-50"
+                    >
+                      Decline
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {booking.status === "awaiting_payment" && (
               <div className="mt-4">
                 <p className="text-stone-500">
                   {isTraveller
-                    ? "This booking is saved but not paid for yet."
-                    : "Waiting on the traveller to complete payment."}
+                    ? "Accepted! Pay now to lock in your spot."
+                    : "Waiting on the traveller to pay — this releases back to you automatically if they don't within 24 hours."}
                 </p>
                 {isTraveller && (
                   <Button
@@ -183,14 +258,6 @@ export default function BookingDetail() {
                   </Button>
                 )}
               </div>
-            )}
-
-            {booking.status === "paid" && (
-              <p className="mt-4 text-stone-500">
-                {isLocal
-                  ? "Accept or decline this booking from your dashboard to confirm the meetup."
-                  : "Waiting for your local to accept the booking."}
-              </p>
             )}
 
             {(booking.status === "accepted" || booking.status === "itinerary_delivered") && (
@@ -270,6 +337,24 @@ export default function BookingDetail() {
 
             {booking.status === "cancelled" && (
               <p className="mt-4 text-stone-500">This booking was cancelled.</p>
+            )}
+
+            {booking.status === "declined" && (
+              <p className="mt-4 text-stone-500">
+                {isLocal ? "You declined this request." : "This request was declined. Nothing was charged."}
+              </p>
+            )}
+
+            {booking.status === "expired" && (
+              <p className="mt-4 text-stone-500">
+                This request expired without a response. Nothing was charged.
+              </p>
+            )}
+
+            {booking.status === "unavailable" && (
+              <p className="mt-4 text-stone-500">
+                Another traveller was accepted for this slot first. Nothing was charged — try another time or local.
+              </p>
             )}
 
             {booking.status === "disputed" && (
