@@ -38,6 +38,7 @@ export default function AdminPanel() {
   const [payoutNotes, setPayoutNotes] = useState({});
   const [rejectReasons, setRejectReasons] = useState({});
   const [banReasons, setBanReasons] = useState({});
+  const [bankRejectReasons, setBankRejectReasons] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -144,6 +145,25 @@ export default function AdminPanel() {
       load();
     } catch (e) {
       toast.error("Failed to unban user");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleBankVerify = async (guideId, verified) => {
+    const reason = bankRejectReasons[guideId]?.trim();
+    if (!verified && !reason) {
+      toast.error("Add a reason before marking verification as failed");
+      return;
+    }
+    setActing(`bank-${guideId}`);
+    try {
+      await api.post(`/admin/guides/${guideId}/bank/verify`, { verified, reason: verified ? null : reason });
+      toast.success(verified ? "Marked as verified" : "Marked as failed");
+      setBankRejectReasons((r) => ({ ...r, [guideId]: "" }));
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to update verification");
     } finally {
       setActing(null);
     }
@@ -493,7 +513,7 @@ export default function AdminPanel() {
                       )}
                       {p.bank_verification_status === "pending" && (
                         <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
-                          <Clock className="h-3.5 w-3.5" /> Verifying…
+                          <Clock className="h-3.5 w-3.5" /> Awaiting your review
                         </Badge>
                       )}
                       {(p.bank_verification_status === "failed" || p.bank_verification_status === "none" || !p.bank_verification_status) && (
@@ -503,6 +523,39 @@ export default function AdminPanel() {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-stone-400">{p.service_title} · {p.booking_date}</div>
+                    {p.bank_verification_status === "failed" && p.bank_verification_reason && (
+                      <div className="mt-1 text-xs text-red-700">Reason: {p.bank_verification_reason}</div>
+                    )}
+                    {p.bank_verification_status !== "verified" && (p.bank_account_number_masked || p.upi_vpa) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => handleBankVerify(p.guide_id, true)}
+                          disabled={acting === `bank-${p.guide_id}`}
+                          data-testid={`bank-verify-${p.guide_id}`}
+                          className="bg-green-800 text-white hover:bg-green-900 h-8 text-xs"
+                        >
+                          Mark verified
+                        </Button>
+                        <Input
+                          value={bankRejectReasons[p.guide_id] || ""}
+                          onChange={(e) => setBankRejectReasons((r) => ({ ...r, [p.guide_id]: e.target.value }))}
+                          placeholder="Reason if failing"
+                          className="h-8 text-xs w-40"
+                          data-testid={`bank-reject-reason-${p.guide_id}`}
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleBankVerify(p.guide_id, false)}
+                          disabled={acting === `bank-${p.guide_id}`}
+                          data-testid={`bank-reject-${p.guide_id}`}
+                          className="border-red-300 text-red-700 hover:bg-red-50 h-8 text-xs"
+                        >
+                          Mark failed
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="min-w-[200px] rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 text-sm">
