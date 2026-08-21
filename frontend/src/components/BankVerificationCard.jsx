@@ -55,8 +55,8 @@ export default function BankVerificationCard({ guide, onUpdated }) {
         <h2 className="font-heading text-lg font-semibold text-stone-900">Payout details</h2>
       </div>
       <p className="mt-1 text-sm text-stone-500">
-        Trips are paid to LKK first — we transfer your share to this account after each completed trip. We verify these
-        details with a small ₹1 check before trusting them.
+        Trips are paid to LKK first — we transfer your share to this account after each completed trip. Our team
+        personally reviews these details before your first payout.
       </p>
 
       <div className="mt-3 flex items-center gap-2">
@@ -67,7 +67,7 @@ export default function BankVerificationCard({ guide, onUpdated }) {
         )}
         {status === "pending" && (
           <Badge data-testid="bank-status-pending" variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 gap-1">
-            <Clock className="h-3.5 w-3.5" /> Verifying…
+            <Clock className="h-3.5 w-3.5" /> Under review
           </Badge>
         )}
         {status === "failed" && (
