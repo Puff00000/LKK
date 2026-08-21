@@ -1163,6 +1163,38 @@ async def admin_review_video(guide_id: str, body: VideoReviewIn, admin: dict = D
     return {"ok": True, "approved": body.approved, "banned": body.ban_user}
 
 
+class BankVerifyIn(BaseModel):
+    verified: bool
+    reason: Optional[str] = None  # required when rejecting
+
+@api.post("/admin/guides/{guide_id}/bank/verify")
+async def admin_verify_bank(guide_id: str, body: BankVerifyIn, admin: dict = Depends(require_role("admin"))):
+    """Manual replacement for RazorpayX's automated ₹1 penny-drop check —
+    admin personally confirms the local's bank/UPI details (e.g. by calling
+    them) before their first payout, rather than relying on an automated
+    validation API that requires a separate RazorpayX business account."""
+    async with db_pool.acquire() as conn:
+        guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", guide_id)
+        if not guide:
+            raise HTTPException(status_code=404, detail="Guide not found")
+        if not guide["bank_account_number"] and not guide["upi_vpa"]:
+            raise HTTPException(status_code=400, detail="This local hasn't submitted payout details yet")
+        if not body.verified and not (body.reason and body.reason.strip()):
+            raise HTTPException(status_code=400, detail="A reason is required when marking verification as failed")
+        await conn.execute(
+            """UPDATE guides SET
+               bank_verification_status=$1,
+               bank_verification_reason=$2,
+               bank_verified_at=$3
+               WHERE id=$4""",
+            "verified" if body.verified else "failed",
+            None if body.verified else body.reason.strip(),
+            datetime.now(timezone.utc) if body.verified else None,
+            guide_id,
+        )
+    return {"ok": True, "verified": body.verified}
+
+
 @api.get("/guides")
 async def list_guides(
     city: Optional[str] = None,
@@ -1312,30 +1344,24 @@ async def submit_bank_details(body: BankDetailsIn, user: dict = Depends(require_
     if has_bank and has_upi:
         raise HTTPException(status_code=400, detail="Enter only one: bank account OR UPI, not both")
 
+    # Verification is manual, not automated — RazorpayX's Fund Account
+    # Validation API (the ₹1 penny-drop check) requires a RazorpayX account,
+    # which is a separate product from standard Razorpay Payment Gateway and
+    # needs its own business-banking approval. Rather than depend on that,
+    # an admin reviews these details directly (see /admin/guides/{id}/bank/verify)
+    # before the local's first payout — a personal check is arguably more
+    # reliable than an automated one at this scale anyway.
     async with db_pool.acquire() as conn:
         guide = await conn.fetchrow("SELECT * FROM guides WHERE user_id = $1", str(user["id"]))
         if not guide:
             raise HTTPException(status_code=400, detail="Create your local profile before adding payout details")
 
-        contact_id = guide["razorpay_contact_id"]
-        if not contact_id:
-            contact_id = await razorpay_create_contact(body.account_name, user["email"], str(guide["id"]))
-
-        if has_bank:
-            fund_account_id = await razorpay_create_fund_account_bank(
-                contact_id, body.account_name, body.account_number, body.ifsc.upper()
-            )
-        else:
-            fund_account_id = await razorpay_create_fund_account_vpa(contact_id, body.upi_vpa)
-
-        await razorpay_trigger_validation(fund_account_id)
-
         await conn.execute(
             """UPDATE guides SET bank_account_name=$1, bank_account_number=$2, bank_ifsc=$3, upi_vpa=$4,
-               razorpay_contact_id=$5, razorpay_fund_account_id=$6, bank_verification_status='pending',
-               bank_verification_reason=NULL, bank_verified_at=NULL WHERE id=$7""",
+               bank_verification_status='pending', bank_verification_reason=NULL, bank_verified_at=NULL
+               WHERE id=$5""",
             body.account_name, body.account_number, body.ifsc.upper() if body.ifsc else None, body.upi_vpa,
-            contact_id, fund_account_id, str(guide["id"])
+            str(guide["id"])
         )
         guide = await conn.fetchrow("SELECT * FROM guides WHERE id = $1", str(guide["id"]))
     d = row_to_dict(guide)
@@ -1856,6 +1882,11 @@ async def razorpay_webhook(request: Request):
             if booking and booking["status"] == "awaiting_payment":
                 await _mark_booking_paid(conn, booking, payment_id)
     elif event in ("fund_account.validation.completed", "fund_account.validation.failed"):
+        # Currently dormant — bank verification is manual (admin review) as of
+        # the switch away from RazorpayX Fund Account Validation. No fund
+        # account gets created anymore, so this webhook will never actually
+        # fire. Left in place in case RazorpayX gets activated later, at
+        # which point this becomes live again with no rebuild needed.
         validation_entity = payload["payload"]["fund_account.validation"]["entity"]
         fund_account_id = validation_entity.get("fund_account", {}).get("id")
         status = validation_entity.get("status")  # "completed" | "failed"
