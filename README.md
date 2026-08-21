@@ -18,16 +18,14 @@ A traveller books a short, in-person experience with a local guide in their dest
 | Database | PostgreSQL (Supabase), accessed directly via `asyncpg` |
 | File storage | Supabase Storage (avatars, intro videos) |
 | Frontend | React (Create React App + CRACO), Tailwind CSS, shadcn/ui |
-| Payments | Razorpay (checkout + RazorpayX for local payouts) |
+| Payments | Razorpay|
 | Email | Resend |
-| SMS / OTP | MSG91 (falls back to a mock code in local dev if unconfigured) |
 | Hosting | Backend on Render, frontend on Vercel |
 
 ## Features
 
 - **Two roles**: Travellers browse and book; Locals list experiences and host them
 - **Identity verification**: profile photo and intro video are captured live via the browser camera (no gallery upload) — admin-reviewed before a local can list a service
-- **Phone verification**: OTP-based, required before a local's dashboard unlocks
 - **Email verification**: required before first login
 - **Booking flow**: Razorpay checkout → payment held → local accepts → itinerary delivered → traveller confirms completion → payout released
 - **In-app chat**: per-booking messaging to coordinate meetup details
