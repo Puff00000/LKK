@@ -51,15 +51,31 @@ export default function BookingDetail() {
   const [confirming, setConfirming] = useState(false);
   const [paying, setPaying] = useState(false);
   const [responding, setResponding] = useState(false);
+  const [chatUnavailableReason, setChatUnavailableReason] = useState(null);
+  const [canSendChat, setCanSendChat] = useState(true);
   const messagesEndRef = useRef(null);
 
   const loadAll = async () => {
-    const [{ data: b }, { data: m }] = await Promise.all([
-      api.get(`/bookings/${id}`),
-      api.get(`/bookings/${id}/messages`),
-    ]);
+    const { data: b } = await api.get(`/bookings/${id}`);
     setBooking(b);
-    setMessages(m);
+    // Fetched separately from the booking itself — messages can 403 before
+    // payment or after the post-trip window closes, and that shouldn't take
+    // the whole page down with it.
+    try {
+      const { data: m } = await api.get(`/bookings/${id}/messages`);
+      setMessages(m);
+      setChatUnavailableReason(null);
+      const now = Date.now();
+      const graceMs = 48 * 60 * 60 * 1000; // mirror backend CHAT_GRACE_HOURS default
+      const writable =
+        ["accepted", "itinerary_delivered", "disputed"].includes(b.status) ||
+        (b.status === "completed" && b.completed_at && now - new Date(b.completed_at).getTime() < graceMs);
+      setCanSendChat(writable);
+    } catch (e) {
+      setMessages([]);
+      setCanSendChat(false);
+      setChatUnavailableReason(formatApiError(e.response?.data?.detail) || "Chat isn't available for this booking yet.");
+    }
   };
 
   useEffect(() => {
@@ -79,7 +95,7 @@ export default function BookingDetail() {
   const isLocal = user?.id === booking.local_user_id;
 
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !canSendChat) return;
     const content = input;
     setInput("");
     try {
@@ -377,10 +393,13 @@ export default function BookingDetail() {
             <div className="text-xs text-stone-500">Messages refresh every few seconds.</div>
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
-            {messages.length === 0 && (
+            {chatUnavailableReason && (
+              <div className="text-sm text-stone-400 text-center py-8 px-2">{chatUnavailableReason}</div>
+            )}
+            {!chatUnavailableReason && messages.length === 0 && (
               <div className="text-sm text-stone-400 text-center py-8">No messages yet. Say hi.</div>
             )}
-            {messages.map((m) => {
+            {!chatUnavailableReason && messages.map((m) => {
               const mine = m.sender_id === user?.id;
               return (
                 <div
@@ -406,13 +425,24 @@ export default function BookingDetail() {
               data-testid="chat-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-              placeholder="Type a message…"
+              onKeyDown={(e) => e.key === "Enter" && canSendChat && sendMessage()}
+              placeholder={canSendChat ? "Type a message…" : "Chat is closed for this booking"}
+              disabled={!canSendChat}
             />
-            <Button data-testid="chat-send" onClick={sendMessage} className="bg-green-800 text-white hover:bg-green-900 hover:text-white shrink-0">
+            <Button
+              data-testid="chat-send"
+              onClick={sendMessage}
+              disabled={!canSendChat}
+              className="bg-green-800 text-white hover:bg-green-900 hover:text-white shrink-0 disabled:opacity-40"
+            >
               <Send className="h-4 w-4" />
             </Button>
           </div>
+          {!canSendChat && !chatUnavailableReason && (
+            <div className="px-3 pb-3 text-xs text-stone-400 text-center">
+              Chat has closed for this booking. Start a dispute if you still need help.
+            </div>
+          )}
         </aside>
       </div>
     </div>
