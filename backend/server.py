@@ -18,11 +18,11 @@ import json
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Literal
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, File, UploadFile
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, File, UploadFile
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
 import asyncpg
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -35,6 +35,27 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
+AUTH_COOKIE_NAME = "lkk_token"
+# Frontend (Vercel) and backend (Render) are different domains, so the cookie
+# needs SameSite=None + Secure to be sent cross-site at all. In local dev
+# (http://localhost) Secure cookies won't be set by the browser, so we relax
+# both flags when COOKIE_SECURE=false is set for local testing.
+_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").strip().lower() != "false"
+_COOKIE_SAMESITE = "none" if _COOKIE_SECURE else "lax"
+
+def set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite=_COOKIE_SAMESITE,
+        max_age=ACCESS_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        path="/",
+    )
+
+def clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/", samesite=_COOKIE_SAMESITE, secure=_COOKIE_SECURE)
 PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))
 AUTO_VERIFY_AFTER_TRIPS = int(os.environ.get("AUTO_VERIFY_AFTER_TRIPS", "3"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -86,6 +107,25 @@ async def get_db() -> asyncpg.Pool:
 # --- Helpers ---------------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+_COMMON_WEAK_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789",
+    "qwerty123", "letmein1", "admin123", "welcome1", "iloveyou1",
+    "abc12345", "1234567890", "passw0rd", "changeme",
+}
+
+def validate_password_strength(password: str) -> str:
+    """Reject the weakest passwords beyond the bare min_length check. Not a
+    full policy (no forced special-char rules — those push people toward
+    predictable substitutions), just a floor against trivially guessable
+    passwords."""
+    if password.lower() in _COMMON_WEAK_PASSWORDS:
+        raise ValueError("This password is too common. Please choose a stronger one.")
+    if password.isdigit():
+        raise ValueError("Password can't be all numbers.")
+    if len(set(password.lower())) <= 2:
+        raise ValueError("Password is too repetitive. Please choose a stronger one.")
+    return password
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -433,8 +473,11 @@ async def get_current_user(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ) -> dict:
-    token = None
-    if creds and creds.scheme.lower() == "bearer":
+    # Cookie is the primary auth path now (httpOnly, not readable by JS —
+    # closes the localStorage-token XSS exposure). Bearer header is kept as
+    # a fallback for direct API/tooling use (Postman, tests, etc.).
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if not token and creds and creds.scheme.lower() == "bearer":
         token = creds.credentials
     if not token:
         auth_header = request.headers.get("Authorization", "")
@@ -479,8 +522,13 @@ def require_role(*roles: str):
 # --- Models ----------------------------------------------------------------
 class RegisterIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=8)
     name: str = Field(min_length=1)
+
+    @field_validator("password")
+    @classmethod
+    def password_not_too_weak(cls, v):
+        return validate_password_strength(v)
     role: Literal["traveller", "local"]
     phone: Optional[str] = None
     city: Optional[str] = None
@@ -879,7 +927,7 @@ async def resend_verification(request: Request, body: ResendVerificationIn):
 
 @api.post("/auth/login")
 @limiter.limit("10/minute")
-async def login(request: Request, body: LoginIn):
+async def login(request: Request, response: Response, body: LoginIn):
     email = body.email.lower()
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
@@ -891,7 +939,16 @@ async def login(request: Request, body: LoginIn):
         raise HTTPException(status_code=403, detail="Please verify your email before logging in. Check your inbox, or request a new link.")
     user_dict = row_to_dict(user)
     token = create_token(str(user["id"]), user["email"], user["role"])
+    set_auth_cookie(response, token)
+    # Token is still returned in the body for now so non-browser API clients
+    # keep working, but the frontend no longer reads or stores it — the
+    # httpOnly cookie above is what actually authenticates browser requests.
     return {"token": token, "user": public_user(user_dict)}
+
+@api.post("/auth/logout")
+async def logout(response: Response):
+    clear_auth_cookie(response)
+    return {"ok": True}
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
@@ -2270,7 +2327,12 @@ class ForgotPasswordIn(BaseModel):
 
 class ResetPasswordIn(BaseModel):
     token: str
-    new_password: str = Field(min_length=6)
+    new_password: str = Field(min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_not_too_weak(cls, v):
+        return validate_password_strength(v)
 
 @api.post("/auth/forgot-password")
 @limiter.limit("5/hour")
