@@ -956,6 +956,33 @@ async def me(user: dict = Depends(get_current_user)):
 
 ACTIVE_BOOKING_STATUSES = ("requested", "awaiting_payment", "accepted", "itinerary_delivered")
 
+# --- Chat access window -----------------------------------------------------
+# Chat opens once the local has accepted AND the traveller has paid (paid_at
+# gets set at that moment), stays open through delivery and any dispute, and
+# after the trip is marked completed it stays open for a short grace window
+# so post-trip disagreements can be worked out before someone either files a
+# formal dispute or just leaves a review. After the window, new messages are
+# blocked but the existing thread stays readable indefinitely — both as a
+# record for the two participants and as evidence if a dispute gets filed
+# later citing something said in chat.
+CHAT_GRACE_HOURS = int(os.environ.get("CHAT_GRACE_HOURS", "48"))
+
+def chat_read_allowed(booking) -> bool:
+    """History stays visible forever once payment happened, regardless of
+    what the booking's current status is (a disputed-then-refunded booking
+    ends up back at status='cancelled' — same label as a booking that was
+    declined pre-payment and never had a chat at all, so status alone can't
+    be trusted here; paid_at is the real signal)."""
+    return booking["paid_at"] is not None
+
+def chat_write_allowed(booking) -> bool:
+    if booking["status"] in ("accepted", "itinerary_delivered", "disputed"):
+        return True
+    if booking["status"] == "completed" and booking["completed_at"]:
+        window_ends = booking["completed_at"].replace(tzinfo=timezone.utc) + timedelta(hours=CHAT_GRACE_HOURS)
+        return datetime.now(timezone.utc) < window_ends
+    return False
+
 class AccountDeleteIn(BaseModel):
     password: str
 
@@ -2083,6 +2110,8 @@ async def get_messages(booking_id: str, user: dict = Depends(get_current_user)):
             str(booking["traveller_user_id"]), str(booking["local_user_id"])
         ):
             raise HTTPException(status_code=403, detail="Not your booking")
+        if user["role"] != "admin" and not chat_read_allowed(booking):
+            raise HTTPException(status_code=403, detail="Chat opens once this booking is accepted and paid for.")
         msgs = await conn.fetch(
             "SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC",
             booking_id
@@ -2099,6 +2128,10 @@ async def post_message(booking_id: str, body: MessageIn, user: dict = Depends(ge
             str(booking["traveller_user_id"]), str(booking["local_user_id"])
         ):
             raise HTTPException(status_code=403, detail="Not your booking")
+        if user["role"] != "admin" and not chat_read_allowed(booking):
+            raise HTTPException(status_code=403, detail="Chat opens once this booking is accepted and paid for.")
+        if user["role"] != "admin" and not chat_write_allowed(booking):
+            raise HTTPException(status_code=403, detail="Chat for this booking has closed. Start a dispute if you still need help sorting something out.")
         if contains_contact_info(body.content):
             raise HTTPException(
                 status_code=400,
