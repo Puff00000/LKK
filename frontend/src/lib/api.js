@@ -2,15 +2,10 @@ import axios from "axios";
 
 export const API_URL = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-export const api = axios.create({ baseURL: API_URL });
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("lkk_token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// withCredentials so the httpOnly auth cookie set by the backend is sent
+// on every request — the token itself is never readable from JS, which is
+// the point (closes off token theft via XSS).
+export const api = axios.create({ baseURL: API_URL, withCredentials: true });
 
 export function formatApiError(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
