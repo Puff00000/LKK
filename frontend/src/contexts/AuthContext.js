@@ -8,17 +8,13 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const token = localStorage.getItem("lkk_token");
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+    // No token to check client-side anymore — the auth cookie is httpOnly,
+    // so we just ask the backend. A 401 here means "not logged in", which
+    // is the normal, expected case for a first-time visitor.
     try {
       const { data } = await api.get("/auth/me");
       setUser(data.user);
     } catch {
-      localStorage.removeItem("lkk_token");
       setUser(null);
     } finally {
       setLoading(false);
@@ -32,7 +28,6 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     try {
       const { data } = await api.post("/auth/login", { email, password });
-      localStorage.setItem("lkk_token", data.token);
       setUser(data.user);
       return { ok: true, user: data.user };
     } catch (e) {
@@ -50,7 +45,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    localStorage.removeItem("lkk_token");
+    api.post("/auth/logout").catch(() => {});
     setUser(null);
   };
 
