@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import BankVerificationCard from "@/components/BankVerificationCard";
+import VoiceOnboardWidget from "@/components/VoiceOnboardWidget";
 
 const STATUS = {
   requested:       { text: "New request", className: "bg-amber-50 text-amber-900 border-amber-300" },
@@ -85,6 +86,21 @@ function ServiceForm({ initial, onCancel, onSaved }) {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  // Only overwrites fields the AI actually returned — a category or duration
+  // that failed the backend's own validation is simply left out, so it never
+  // silently overwrites something already typed with a bad value.
+  const onVoiceExtracted = (extracted) => {
+    setForm((f) => ({
+      ...f,
+      ...(extracted.title !== undefined ? { title: extracted.title } : {}),
+      ...(extracted.description !== undefined ? { description: extracted.description } : {}),
+      ...(extracted.category !== undefined ? { category: extracted.category } : {}),
+      ...(extracted.duration_hours !== undefined ? { duration_hours: extracted.duration_hours } : {}),
+      ...(extracted.cost_note !== undefined ? { cost_note: extracted.cost_note } : {}),
+    }));
+  };
+
+
   const submit = async (e) => {
     e.preventDefault();
     if (!form.title.trim() || !form.description.trim()) {
@@ -132,6 +148,8 @@ function ServiceForm({ initial, onCancel, onSaved }) {
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      <VoiceOnboardWidget target="service" onExtracted={onVoiceExtracted} />
 
       <div>
         <Label htmlFor="svc-title">Title</Label>
