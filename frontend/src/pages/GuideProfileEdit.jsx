@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { CheckCircle2, ShieldCheck, ShieldAlert, Video, Clock, XCircle, AlertTriangle, Camera } from "lucide-react";
 import CameraCaptureModal from "@/components/CameraCaptureModal";
 import CameraRecordModal from "@/components/CameraRecordModal";
+import VoiceOnboardWidget from "@/components/VoiceOnboardWidget";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -60,6 +61,19 @@ export default function GuideProfileEdit() {
   const missingPhoto = !form.avatar_url;
   const missingVideo = !form.video_url;
   const canSave = !missingPhoto && !missingVideo;
+
+  // Only overwrites fields the AI actually returned — anything already typed
+  // for a field it left out (or that failed validation) is untouched.
+  const onVoiceExtracted = (extracted) => {
+    setForm((f) => ({
+      ...f,
+      ...(extracted.city !== undefined ? { city: extracted.city } : {}),
+      ...(extracted.bio !== undefined ? { bio: extracted.bio } : {}),
+      ...(extracted.languages !== undefined ? { languages: extracted.languages.join(", ") } : {}),
+      ...(extracted.specialities !== undefined ? { specialities: extracted.specialities.join(", ") } : {}),
+    }));
+  };
+
 
   const submit = async (e) => {
     e.preventDefault();
@@ -287,6 +301,8 @@ export default function GuideProfileEdit() {
             </div>
           </div>
         </div>
+
+        <VoiceOnboardWidget target="profile" onExtracted={onVoiceExtracted} />
 
         <div>
           <Label htmlFor="city">City</Label>
