@@ -24,9 +24,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
 import asyncpg
+from voice_onboarding import build_router as build_voice_onboarding_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+from voice_onboarding import build_router as build_voice_onboarding_router
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -102,6 +105,11 @@ logger = logging.getLogger("lkk")
 db_pool: asyncpg.Pool = None
 
 async def get_db() -> asyncpg.Pool:
+    return db_pool
+
+def get_db_pool() -> asyncpg.Pool:
+    # Sync (non-async) getter, passed to voice_onboarding.py so it can grab
+    # the pool at request time rather than at import time (when it's still None).
     return db_pool
 
 # --- Helpers ---------------------------------------------------------------
@@ -2563,6 +2571,7 @@ async def root():
     return {"ok": True, "service": "lkk"}
 
 app.include_router(api)
+app.include_router(build_voice_onboarding_router(get_db_pool, require_role))
 
 # Default to the known production frontend origins if CORS_ORIGINS isn't set on
 # Render — never fall back to "*", since that combined with allow_credentials=True
