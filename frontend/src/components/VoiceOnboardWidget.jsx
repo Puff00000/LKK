@@ -57,15 +57,21 @@ export default function VoiceOnboardWidget({ target, onExtracted }) {
     recognition.interimResults = true;
 
     recognition.onresult = (event) => {
-      let finalChunk = "";
-      let interimChunk = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      // Rebuild the full transcript from ALL results every time, rather than
+      // appending each new "final" chunk onto previous state. Android Chrome
+      // periodically re-fires an already-final segment as final again while
+      // it revises its own hypothesis — appending caused that to double up
+      // ("मैं मैं जयपुर मैं जयपुर..."). Recomputing from the browser's own
+      // results array (the actual source of truth) avoids that entirely.
+      let finalText = "";
+      let interimText = "";
+      for (let i = 0; i < event.results.length; i++) {
         const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalChunk += chunk;
-        else interimChunk += chunk;
+        if (event.results[i].isFinal) finalText += chunk + " ";
+        else interimText += chunk;
       }
-      if (finalChunk) setTranscript((prev) => (prev ? `${prev} ${finalChunk}` : finalChunk));
-      setInterim(interimChunk);
+      setTranscript(finalText.trim());
+      setInterim(interimText);
     };
 
     recognition.onerror = (event) => {
@@ -163,6 +169,7 @@ export default function VoiceOnboardWidget({ target, onExtracted }) {
           <Textarea
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
+            disabled={isRecording}
             placeholder="What you say will appear here — you can edit it before continuing"
             rows={3}
             data-testid="voice-transcript"
