@@ -7,7 +7,7 @@ import { Mic, Square, Sparkles, Languages } from "lucide-react";
 
 // Keep in sync with SUPPORTED_LANGUAGES in backend/voice_onboarding.py —
 // the codes are what the browser's own speech recognizer understands.
-const LANGUAGES = [
+export const LANGUAGES = [
   { code: "hi-IN", label: "Hindi" },
   { code: "or-IN", label: "Odia" },
   { code: "ta-IN", label: "Tamil" },
@@ -33,9 +33,14 @@ const LANGUAGES = [
  *   target: "profile" | "service" — which extraction prompt the backend uses
  *   onExtracted: (fields: object, warnings: string[]) => void
  */
-export default function VoiceOnboardWidget({ target, onExtracted }) {
+export default function VoiceOnboardWidget({ target, onExtracted, languageCode: controlledLanguage, onLanguageChange, hideLanguagePicker = false }) {
   const [supported, setSupported] = useState(true);
-  const [languageCode, setLanguageCode] = useState("hi-IN");
+  const [internalLanguage, setInternalLanguage] = useState("hi-IN");
+  // Controlled if a parent passes languageCode (e.g. the onboarding wizard,
+  // so the guide picks their language once and it carries across steps);
+  // otherwise falls back to owning it locally, exactly as before.
+  const languageCode = controlledLanguage ?? internalLanguage;
+  const setLanguageCode = onLanguageChange ?? setInternalLanguage;
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [interim, setInterim] = useState("");
@@ -47,55 +52,88 @@ export default function VoiceOnboardWidget({ target, onExtracted }) {
     setSupported(!!SpeechRecognition);
   }, []);
 
-  const startRecording = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+  const accumulatedRef = useRef(""); // finalized text carried across auto-restarts
+  const manualStopRef = useRef(false);
+  const restartCountRef = useRef(0);
 
+  const startSession = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.lang = languageCode;
     recognition.continuous = true;
     recognition.interimResults = true;
 
     recognition.onresult = (event) => {
-      // Rebuild the full transcript from ALL results every time, rather than
-      // appending each new "final" chunk onto previous state. Android Chrome
-      // periodically re-fires an already-final segment as final again while
-      // it revises its own hypothesis — appending caused that to double up
-      // ("मैं मैं जयपुर मैं जयपुर..."). Recomputing from the browser's own
-      // results array (the actual source of truth) avoids that entirely.
-      let finalText = "";
-      let interimText = "";
+      // Rebuild THIS session's final text from all its results every time
+      // (avoids the double-counting bug), then lay it on top of whatever
+      // was already finalized in earlier sessions before an auto-restart.
+      let sessionFinal = "";
+      let sessionInterim = "";
       for (let i = 0; i < event.results.length; i++) {
         const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += chunk + " ";
-        else interimText += chunk;
+        if (event.results[i].isFinal) sessionFinal += chunk + " ";
+        else sessionInterim += chunk;
       }
-      setTranscript(finalText.trim());
-      setInterim(interimText);
+      const combined = `${accumulatedRef.current} ${sessionFinal}`.trim();
+      setTranscript(combined);
+      setInterim(sessionInterim);
     };
 
     recognition.onerror = (event) => {
       if (event.error === "not-allowed") {
         toast.error("Microphone access was blocked — allow it in your browser settings and try again.");
+        manualStopRef.current = true;
       } else if (event.error === "no-speech") {
-        toast.error("Didn't hear anything — try again a bit closer to the mic.");
+        // Not a real error — the browser just didn't hear anything in this
+        // stretch. onend will fire right after; let the auto-restart below
+        // handle it silently instead of alarming the user.
       } else {
         toast.error("Recording error — please try again.");
+        manualStopRef.current = true;
       }
-      setIsRecording(false);
     };
 
     recognition.onend = () => {
-      setIsRecording(false);
+      // Lock in whatever this session captured before deciding what's next.
+      setTranscript((current) => {
+        accumulatedRef.current = current;
+        return current;
+      });
       setInterim("");
+
+      if (manualStopRef.current) {
+        setIsRecording(false);
+        return;
+      }
+      // The browser ended the session on its own (silence/pause) — the
+      // guide is still talking, so keep listening without them noticing.
+      restartCountRef.current += 1;
+      if (restartCountRef.current > 20) {
+        toast.error("Recording stopped after a long session — please review the transcript, or tap Record to continue.");
+        setIsRecording(false);
+        return;
+      }
+      startSession();
     };
 
     recognitionRef.current = recognition;
     recognition.start();
+  };
+
+  const startRecording = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    manualStopRef.current = false;
+    restartCountRef.current = 0;
+    accumulatedRef.current = "";
+    setTranscript("");
+    setInterim("");
+    startSession();
     setIsRecording(true);
   };
 
   const stopRecording = () => {
+    manualStopRef.current = true;
     recognitionRef.current?.stop();
   };
 
@@ -140,18 +178,22 @@ export default function VoiceOnboardWidget({ target, onExtracted }) {
       </div>
 
       <div className="flex items-center gap-2">
-        <Languages className="h-4 w-4 text-stone-500 shrink-0" />
-        <select
-          value={languageCode}
-          onChange={(e) => setLanguageCode(e.target.value)}
-          disabled={isRecording}
-          data-testid="voice-language-select"
-          className="text-sm rounded-md border border-stone-300 bg-white px-2 py-1.5"
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{l.label}</option>
-          ))}
-        </select>
+        {!hideLanguagePicker && (
+          <>
+            <Languages className="h-4 w-4 text-stone-500 shrink-0" />
+            <select
+              value={languageCode}
+              onChange={(e) => setLanguageCode(e.target.value)}
+              disabled={isRecording}
+              data-testid="voice-language-select"
+              className="text-sm rounded-md border border-stone-300 bg-white px-2 py-1.5"
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
+            </select>
+          </>
+        )}
 
         {!isRecording ? (
           <Button type="button" size="sm" variant="outline" onClick={startRecording} data-testid="voice-record-start" className="border-stone-300">
