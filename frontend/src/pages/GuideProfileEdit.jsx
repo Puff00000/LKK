@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { api, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,6 +180,9 @@ export default function GuideProfileEdit() {
           <div className="text-sm text-green-900">
             <div className="font-medium">Almost done!</div>
             <div>Add your bio, photo, video, and expertise here, then list your bite-sized experiences on your dashboard. You'll go live as <span className="font-semibold">Unverified</span> until you complete 3 trips (or an admin verifies you).</div>
+            <Link to="/local/onboard" className="mt-2 inline-block font-medium underline underline-offset-2" data-testid="link-ai-wizard">
+              Prefer to set this up by speaking instead? Try the guided AI setup →
+            </Link>
           </div>
         </div>
       )}
