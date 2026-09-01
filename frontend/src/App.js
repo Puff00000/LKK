@@ -19,6 +19,7 @@ import BookingFlow from "@/pages/BookingFlow";
 import TravellerDashboard from "@/pages/TravellerDashboard";
 import LocalDashboard from "@/pages/LocalDashboard";
 import GuideProfileEdit from "@/pages/GuideProfileEdit";
+import GuideOnboardWizard from "@/pages/GuideOnboardWizard";
 import BookingDetail from "@/pages/BookingDetail";
 import Settings from "@/pages/Settings";
 import AdminPanel from "@/pages/AdminPanel";
@@ -75,6 +76,14 @@ export default function App() {
               element={
                 <ProtectedRoute roles={["local"]}>
                   <GuideProfileEdit />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/local/onboard"
+              element={
+                <ProtectedRoute roles={["local"]}>
+                  <GuideOnboardWizard />
                 </ProtectedRoute>
               }
             />
