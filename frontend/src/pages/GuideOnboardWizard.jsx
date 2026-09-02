@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import VoiceOnboardWidget, { LANGUAGES } from "@/components/VoiceOnboardWidget";
 import CameraCaptureModal from "@/components/CameraCaptureModal";
 import CameraRecordModal from "@/components/CameraRecordModal";
-import { Camera, Video, Check, Languages as LanguagesIcon } from "lucide-react";
+import { Camera, Video, Check, Languages as LanguagesIcon, ChevronLeft, ChevronRight } from "lucide-react";
 
 // Same lists your manual service form uses — kept in sync on purpose so a
 // voice-filled category/duration always lands on a value this page can show.
@@ -120,6 +120,30 @@ function useT(languageCode) {
 function categoryLabel(languageCode, value) {
   const dict = STRINGS[languageCode] || STRINGS["en-IN"];
   return dict.categories?.[value] ?? STRINGS["en-IN"].categories[value] ?? value;
+}
+
+function StepNav({ onBack, onNext, nextDisabled, backLabel, nextLabel }) {
+  return (
+    <div className="flex justify-center items-center gap-6 pt-4">
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label={backLabel}
+        className="flex items-center justify-center h-12 w-12 rounded-full border-2 border-green-700 text-green-800 hover:bg-green-50 active:scale-95 transition"
+      >
+        <ChevronLeft className="h-6 w-6" />
+      </button>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={nextDisabled}
+        aria-label={nextLabel}
+        className="flex items-center justify-center h-12 w-12 rounded-full bg-green-800 text-white disabled:opacity-40 disabled:pointer-events-none hover:bg-green-900 active:scale-95 transition"
+      >
+        <ChevronRight className="h-6 w-6" />
+      </button>
+    </div>
+  );
 }
 
 export default function GuideOnboardWizard() {
@@ -299,10 +323,7 @@ export default function GuideOnboardWizard() {
             <Label htmlFor="w-specialities">{t("labelSpecialities")}</Label>
             <Input id="w-specialities" value={profile.specialities} onChange={(e) => setProfile((f) => ({ ...f, specialities: e.target.value }))} placeholder={t("placeholderSpecialities")} className="mt-1.5" />
           </div>
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" onClick={goBack}>{t("back")}</Button>
-            <Button onClick={goNext} disabled={!profileReady} className="bg-green-800 text-white hover:bg-green-900">{t("next")}</Button>
-          </div>
+          <StepNav onBack={goBack} onNext={goNext} nextDisabled={!profileReady} backLabel={t("back")} nextLabel={t("next")} />
         </div>
       )}
 
@@ -320,10 +341,7 @@ export default function GuideOnboardWizard() {
           <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={uploading} className="border-stone-300">
             <Camera className="mr-2 h-4 w-4" /> {uploading ? t("uploadingPhoto") : avatarUrl ? t("retakePhoto") : t("takePhoto")}
           </Button>
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" onClick={goBack}>{t("back")}</Button>
-            <Button onClick={goNext} disabled={!avatarUrl} className="bg-green-800 text-white hover:bg-green-900">{t("next")}</Button>
-          </div>
+          <StepNav onBack={goBack} onNext={goNext} nextDisabled={!avatarUrl} backLabel={t("back")} nextLabel={t("next")} />
           <CameraCaptureModal open={cameraOpen} onOpenChange={setCameraOpen} onCapture={onPhotoCaptured} />
         </div>
       )}
@@ -342,10 +360,7 @@ export default function GuideOnboardWizard() {
           <Button variant="outline" onClick={() => setVideoRecorderOpen(true)} disabled={videoUploading} className="border-stone-300">
             <Video className="mr-2 h-4 w-4" /> {videoUploading ? `${t("uploadingPhoto")} ${videoUploadPct}%` : videoUrl ? t("rerecordVideo") : t("recordVideo")}
           </Button>
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" onClick={goBack}>{t("back")}</Button>
-            <Button onClick={goNext} disabled={!videoUrl} className="bg-green-800 text-white hover:bg-green-900">{t("next")}</Button>
-          </div>
+          <StepNav onBack={goBack} onNext={goNext} nextDisabled={!videoUrl} backLabel={t("back")} nextLabel={t("next")} />
           <CameraRecordModal open={videoRecorderOpen} onOpenChange={setVideoRecorderOpen} onCapture={onVideoCaptured} />
         </div>
       )}
@@ -381,10 +396,7 @@ export default function GuideOnboardWizard() {
             <Label htmlFor="w-cost">{t("labelCostNote")}</Label>
             <Input id="w-cost" value={service.cost_note} onChange={(e) => setService((f) => ({ ...f, cost_note: e.target.value }))} placeholder={t("placeholderCostNote")} className="mt-1.5" />
           </div>
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" onClick={goBack}>{t("back")}</Button>
-            <Button onClick={goNext} disabled={!serviceReady} className="bg-green-800 text-white hover:bg-green-900">{t("next")}</Button>
-          </div>
+          <StepNav onBack={goBack} onNext={goNext} nextDisabled={!serviceReady} backLabel={t("back")} nextLabel={t("next")} />
         </div>
       )}
 
