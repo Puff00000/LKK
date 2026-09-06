@@ -81,10 +81,8 @@ yarn start     # craco start
 | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | File storage (avatars, videos) |
 | `RESEND_API_KEY` | Optional — email logs to console if unset |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Payments |
-| `RAZORPAY_X_ACCOUNT_NUMBER` | Optional — local payouts |
 | `GROQ_API_KEY` | Powers AI voice onboarding — feature returns a clear "not configured" error if unset, rest of the app is unaffected |
 | `GROQ_MODEL` | Optional — defaults to `openai/gpt-oss-120b`; override if Groq deprecates the default (they do this periodically) |
-| `MSG91_AUTH_KEY`, `MSG91_TEMPLATE_ID` | Optional — falls back to mock OTP (`123456`) if unset |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Seeds the first admin account on startup if it doesn't already exist |
 | `CORS_ORIGINS` | Comma-separated exact origins, e.g. `https://www.lkk.co.in,https://lkk.co.in` |
 | `FRONTEND_URL` | Optional — used to build links in emails |
