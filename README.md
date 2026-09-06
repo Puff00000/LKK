@@ -19,6 +19,7 @@ A traveller books a short, in-person experience with a local guide in their dest
 | File storage | Supabase Storage (avatars, intro videos) |
 | Frontend | React (Create React App + CRACO), Tailwind CSS, shadcn/ui |
 | Payments | Razorpay|
+| AI / LLM | Groq API (`openai/gpt-oss-120b`, configurable) — multilingual voice onboarding |
 | Email | Resend |
 | Hosting | Backend on Render, frontend on Vercel |
 
@@ -26,6 +27,7 @@ A traveller books a short, in-person experience with a local guide in their dest
 
 - **Two roles**: Travellers browse and book; Locals list experiences and host them
 - **Identity verification**: profile photo and intro video are captured live via the browser camera (no gallery upload) — admin-reviewed before a local can list a service
+- **AI voice onboarding**: a local can create their profile and listing by speaking, in one of 11 supported languages (screen text fully localized for Hindi and Odia so far) — free browser speech-to-text feeds a Groq-powered extraction step, validated against the same rules as manual entry, with every attempt logged to an audit table and nothing auto-published without the guide confirming
 - **Email verification**: required before first login
 - **Booking flow**: Razorpay checkout → payment held → local accepts → itinerary delivered → traveller confirms completion → payout released
 - **In-app chat**: per-booking messaging to coordinate meetup details
@@ -40,12 +42,13 @@ A traveller books a short, in-person experience with a local guide in their dest
 LKK/
 ├── backend/
 │   ├── server.py          # entire FastAPI app
+│   ├── voice_onboarding.py # AI voice onboarding: Groq extraction + validation + audit log
 │   ├── requirements.txt
 │   └── tests/
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/         # route-level components
-│   │   ├── components/    # shared components, shadcn/ui primitives
+│   │   ├── pages/         # route-level components (incl. GuideOnboardWizard.jsx)
+│   │   ├── components/    # shared components, shadcn/ui primitives, VoiceOnboardWidget.jsx
 │   │   ├── contexts/       # AuthContext
 │   │   └── lib/            # api client, helpers
 │   └── craco.config.js
@@ -79,6 +82,8 @@ yarn start     # craco start
 | `RESEND_API_KEY` | Optional — email logs to console if unset |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Payments |
 | `RAZORPAY_X_ACCOUNT_NUMBER` | Optional — local payouts |
+| `GROQ_API_KEY` | Powers AI voice onboarding — feature returns a clear "not configured" error if unset, rest of the app is unaffected |
+| `GROQ_MODEL` | Optional — defaults to `openai/gpt-oss-120b`; override if Groq deprecates the default (they do this periodically) |
 | `MSG91_AUTH_KEY`, `MSG91_TEMPLATE_ID` | Optional — falls back to mock OTP (`123456`) if unset |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Seeds the first admin account on startup if it doesn't already exist |
 | `CORS_ORIGINS` | Comma-separated exact origins, e.g. `https://www.lkk.co.in,https://lkk.co.in` |
@@ -91,7 +96,7 @@ yarn start     # craco start
 
 ### Database migrations
 
-SQL migrations live in `/migrations` and are **not** run automatically — apply them manually in Supabase's SQL Editor before deploying code that depends on them.
+SQL migrations live in `/migrations` and are **not** run automatically — apply them manually in Supabase's SQL Editor before deploying code that depends on them. This includes `voice_onboarding_audit` (logs every voice onboarding attempt: transcript, extracted fields, validation warnings) — required for AI voice onboarding to log correctly, though its absence never blocks a guide from onboarding.
 
 ## Deployment
 
