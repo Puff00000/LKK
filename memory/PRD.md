@@ -22,10 +22,9 @@ Two-sided marketplace connecting Indian domestic travellers with verified local 
 - Optional: `cancelled` or `disputed` paths.
 - Locals must complete their profile (city + bio + price) to appear in browse.
 
-## Implemented (Feb 2026)
+## Implemented (2026)
 - Backend: full auth (register/login/me), guide CRUD, browse with filters (city, price, sort), bookings (create, Razorpay pay, list, get, deliver itinerary, confirm, dispute, review), polling chat, admin endpoints (users, bookings, disputes, stats, resolve).
 - Frontend: Landing, Browse (filters + search), Guide profile + reviews, Auth (login + register with role), Booking flow (2-step with calendar + Razorpay checkout), Traveller dashboard, Local dashboard + profile edit, Booking detail (itinerary delivery + chat + confirm + dispute + review), Admin panel (4 stats + tabs for bookings/users/disputes).
-- Seeded admin + 6 demo locals across 6 Indian cities.
 
 ## Backlog (next phases)
 - **P1** — File uploads for guide avatar / itinerary attachments (object storage).
